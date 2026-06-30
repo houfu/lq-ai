@@ -6,6 +6,8 @@
 
 LQ.AI maintains a small, deliberately-curated set of **mini-PRDs** for contributions where the underlying capability is already shipped, the missing piece is well-defined, and the path to merge is short. They are not "issues to be claimed" in the usual sense — they are decisions already made by the maintainer team, written down in advance: the scope, the verification criteria, the contributor profile, and the rough effort.
 
+> **Looking for something smaller?** These mini-PRDs are bounded weekend projects, not first-PR-sized. If this is your first contribution, start at [`good-first-issues.md`](good-first-issues.md) — a curated list of hours-not-days items — and come back here for your second.
+
 A practicing attorney can pick up a skill acceptance-test PR. A security engineer can pick up the OWASP LLM Top 10 mapping. An in-house counsel can pick up the Procurement-Readiness Pack. The mini-PRDs make the contract explicit before any work begins, so the contributor decides whether to spend a weekend on this with the same information the maintainer team has.
 
 ## Why we publish these explicitly

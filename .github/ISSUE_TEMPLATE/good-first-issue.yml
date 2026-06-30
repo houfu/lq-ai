@@ -1,0 +1,109 @@
+name: Good First Issue
+description: File a small, first-PR-sized contribution from the curated good-first-issues list
+title: "[Good First Issue] "
+labels: ["good-first-issue", "help wanted"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for picking up a first contribution. This template is for items on the curated [Good First Issues](../docs/contribute/good-first-issues.md) list — small, well-bounded work with a clear rubric.
+
+        **Use the item's slug as the issue title** (e.g. `cypress-response-timeout`). If your idea is larger or not yet on the list, use the [Feature Request](?template=feature-request.yml) template instead, or open a [Discussion](https://github.com/legalquants/lq-ai/discussions) first.
+
+        **Not a good first issue:** anything touching `gateway/`, authentication, authorization, audit logging, or cryptography — those are security-reviewed and go through a maintainer.
+
+  - type: checkboxes
+    id: prerequisites
+    attributes:
+      label: Prerequisites
+      options:
+        - label: This item is on the curated good-first-issues list (or I've checked it isn't already tracked elsewhere).
+          required: true
+        - label: I have read the contributor onboarding guide (docs/contribute/coding-agent-onboarding.md).
+          required: true
+
+  - type: input
+    id: slug
+    attributes:
+      label: Item slug
+      description: The slug from the good-first-issues list, used as the issue title.
+      placeholder: e.g., cypress-response-timeout
+    validations:
+      required: true
+
+  - type: input
+    id: source-anchor
+    attributes:
+      label: Source anchor
+      description: The DE-### entry or ROADMAP row this item comes from.
+      placeholder: e.g., DE-255
+
+  - type: dropdown
+    id: track
+    attributes:
+      label: Track
+      options:
+        - "A — Self-hosting & operator docs"
+        - "B — Junior code first-PR (Frontend)"
+        - "B — Junior code first-PR (Backend)"
+        - "C — Docs & quality"
+        - "D — Legal-domain & skills"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: skills
+    attributes:
+      label: Skills involved
+      multiple: true
+      options:
+        - "Frontend (SvelteKit)"
+        - "Backend (FastAPI / Python)"
+        - "DevOps (Docker / Helm / CI)"
+        - "Documentation"
+        - "Legal-domain (practicing attorney / in-house counsel)"
+        - "Other / unsure"
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: What this is
+      description: One or two sentences on the change, mirroring the good-first-issues entry.
+    validations:
+      required: true
+
+  - type: textarea
+    id: where-to-start
+    attributes:
+      label: Where to start
+      description: The file(s) or directory to begin in, plus any linked mini-PRD.
+      placeholder: e.g., cypress.config.ts
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How a reviewer confirms "done." Copy/refine the criteria from the good-first-issues entry.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: collision-guards
+    attributes:
+      label: Code-change guards (Track B)
+      description: Skip for docs-only items. These crash the whole api test suite at collection if missed — see CLAUDE.md.
+      options:
+        - label: If I add a new route, I will add it to IMPLEMENTED_ROUTES and bump the path count + EXPECTED_PATHS in api/tests/test_openapi.py.
+        - label: If I add a 204 endpoint, I will use the response_class=Response recipe.
+        - label: I will run both `ruff format` and `ruff check`, plus the relevant pytest paths, before opening the PR.
+
+  - type: checkboxes
+    id: claim
+    attributes:
+      label: Claim
+      options:
+        - label: I'd like to take this. (A maintainer will assign you within ~7 days.)
