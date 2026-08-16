@@ -13,6 +13,8 @@ This document distills four other sources into one ordered, labelled list:
 
 If a row in this doc disagrees with the canonical source, the source wins. Treat this as a navigation aid, not the source of truth — the source documents above are.
 
+> **New contributor?** This is the full backlog, including multi-week senior work. For a pre-filtered, first-PR-sized starting point, go to [`docs/contribute/good-first-issues.md`](contribute/good-first-issues.md). For bounded weekend projects, see [`docs/contribute/EASIEST-CONTRIBUTIONS.md`](contribute/EASIEST-CONTRIBUTIONS.md).
+
 ## How this is ordered
 
 Within each section, items are listed in the order they should be picked up. Across sections, the ordering reflects the maintainer team's view of dependency and value:
