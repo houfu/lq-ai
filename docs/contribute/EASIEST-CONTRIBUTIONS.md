@@ -29,6 +29,8 @@ That is also the structural posture of the project. The work product an operator
 
 **Effort key:** S = under a day; M = a few days; L = more than a week.
 
+Issues on the tracker labelled `good first issue` or `help wanted` were screened against the same effort key and a scoping checklist; see the [label taxonomy](../../scripts/issue-triage/LABELS.md).
+
 **Foundation readiness** reflects how much of the supporting code, documentation, or convention is already shipped. **High** means the contributor reads existing source, fills the gap, and submits the PR. **Medium-High** means one or two ancillary decisions are still open and the maintainer will resolve them during review.
 
 ## How to claim one

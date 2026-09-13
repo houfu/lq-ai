@@ -398,6 +398,7 @@ By contributing to LQ.AI, you agree that your contributions will be licensed und
 - **General questions** → GitHub Discussions or `#contributors` on Discord.
 - **Bug reports** → GitHub Issues with the `bug` label and a reproduction case.
 - **Feature requests** → GitHub Issues with the `enhancement` label; reference the [PRD §9 Deferred Enhancements](docs/PRD.md#9-deferred-enhancements-and-identified-future-work) entry if one exists.
+- **Issue labels** → [`scripts/issue-triage/LABELS.md`](scripts/issue-triage/LABELS.md) defines type / area / effort / priority and the checklists behind `good first issue` and `help wanted`; maintainers triage with [`scripts/issue-triage/`](scripts/issue-triage/README.md).
 - **Security** → security@legalquants.com (see [`SECURITY.md`](SECURITY.md)).
 - **Skill contributions** → see [`skills/CONTRIBUTING.md`](skills/CONTRIBUTING.md) — the skill-specific contribution path.
 
