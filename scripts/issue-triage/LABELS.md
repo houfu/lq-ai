@@ -45,7 +45,7 @@ Areas mirror the top-level directories. Pick every area whose files a fix would 
 | `area:skills` | `skills/**` — skill content and skill tooling |
 | `area:docs` | `docs/**`, `README.md`, `CONTRIBUTING.md`, top-level policy docs |
 | `area:deploy` | `deploy/**`, `docker-compose*.yml`, `Dockerfile*`, `proxy/**` |
-| `area:ci` | `.github/**`, `Makefile`, `ruff.toml`, lint/test plumbing |
+| `area:ci` | `.github/**`, `Makefile`, `ruff.toml`, `scripts/**`, lint/test plumbing and repo tooling |
 | `area:integrations` | `slack-bridge/**`, `teams-bridge/**`, other outbound bridges |
 
 ## Effort

@@ -303,14 +303,17 @@ def test_review_flags_violations_and_writes_markdown(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     bad = good(number=13, labels=["bug", "enhancement", "effort:S", "priority:P2"])
-    path = write_proposals(tmp_path, [good(), bad])
+    path = write_proposals(tmp_path, [good(pointers=["api/app/x.py", "CLAUDE.md"]), bad])
     md = tmp_path / "proposals.md"
     assert triage.main(["review", "--proposals", str(path), "--md", str(md), "-v"]) == 1
     out = capsys.readouterr().out
     assert "1 proposal(s) violate LABELS.md" in out
     assert "#13: exactly one type" in out
     assert "rationale: Recipe is in CLAUDE.md" in out
-    assert md.read_text().count("\n| #") == 2
+    table = md.read_text()
+    assert table.count("\n| #") == 2
+    assert table.splitlines()[0] == "| # | Title | Labels | Conf | Rationale | Pointers |"
+    assert "| api/app/x.py; CLAUDE.md |" in table
 
 
 def test_review_contributors_filter(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

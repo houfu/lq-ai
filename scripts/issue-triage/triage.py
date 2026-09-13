@@ -69,7 +69,7 @@ AREA_LABELS = {
     "area:skills": ("1d76db", "skills/** — skill content and skill tooling"),
     "area:docs": ("1d76db", "docs/**, README, CONTRIBUTING, policy docs"),
     "area:deploy": ("1d76db", "deploy/**, compose files, Dockerfiles, proxy/**"),
-    "area:ci": ("1d76db", ".github/**, Makefile, lint/test plumbing"),
+    "area:ci": ("1d76db", ".github/**, Makefile, scripts/**, lint/test plumbing and tooling"),
     "area:integrations": ("1d76db", "slack-bridge/**, teams-bridge/**, other bridges"),
 }
 EFFORT_LABELS = {
@@ -276,13 +276,16 @@ def format_table(rows: list[dict[str, Any]], *, verbose: bool) -> str:
 
 
 def format_markdown(rows: list[dict[str, Any]]) -> str:
-    out = ["| # | Title | Labels | Conf | Rationale |", "|---|---|---|---|---|"]
+    def cell(value: Any) -> str:
+        return str(value).replace("|", "\\|").replace("\n", " ")
+
+    out = ["| # | Title | Labels | Conf | Rationale | Pointers |", "|---|---|---|---|---|---|"]
     for p in rows:
         labels = " ".join(f"`{lbl}`" for lbl in p["labels"])
-        rationale = str(p.get("rationale", "")).replace("|", "\\|").replace("\n", " ")
-        title = str(p["title"]).replace("|", "\\|")
+        pointers = "; ".join(cell(x) for x in p.get("pointers") or [])
         out.append(
-            f"| #{p['number']} | {title} | {labels} | {p.get('confidence', '')} | {rationale} |"
+            f"| #{p['number']} | {cell(p['title'])} | {labels} | {p.get('confidence', '')} "
+            f"| {cell(p.get('rationale', ''))} | {pointers} |"
         )
     return "\n".join(out) + "\n"
 
