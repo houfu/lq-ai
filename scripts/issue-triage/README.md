@@ -42,16 +42,16 @@ That is a `Workflow({scriptPath: "scripts/issue-triage/workflow.js", args: {...}
 | Phase | Agents | What happens |
 |---|---|---|
 | Scope | 1 | Reads the dump, returns the untriaged list and the repo's existing labels. |
-| Screen | 1 per batch of 10 | A Sonnet screener reads each issue's body and comments, greps the code or docs it points at, and proposes labels per `LABELS.md`. Returns a rationale and file pointers per issue. |
+| Screen | 1 per batch of 8 | A Sonnet screener reads each issue's body and comments, greps the code or docs it points at, and proposes labels per `LABELS.md`. Returns a rationale and file pointers per issue. |
 | Challenge | at most 1 per batch | Only if that batch proposed `good first issue` or `help wanted`: a Sonnet skeptic tries to refute each flag against the checklist and drops the ones that fail. Runs as soon as its batch is screened; no waiting on other batches. |
 | Reconcile | 1 | Sees every proposal together: normalises label names, enforces one-type/one-effort/one-priority, spots duplicates across issues, writes `out/proposals.json`, and returns a short list of items needing your attention. |
 
-For 70 issues that is roughly 1 + 7 + (up to 7) + 1 agents, about 15 minutes of wall clock. Optional args:
+For 70 issues that is roughly 1 + 9 + (up to 9) + 1 agents. Batches run concurrently, so expect 15–30 minutes of wall clock; a 3-issue smoke run used about 80k Sonnet tokens per agent, so budget on the order of a couple of million tokens for the full tracker. Optional args:
 
 | Arg | Default | Use |
 |---|---|---|
 | `repo` | `LegalQuants/lq-ai` | Recorded in the output file. |
-| `batchSize` | `10` | Smaller batches = more, shallower agents. |
+| `batchSize` | `8` | Smaller batches = more, shallower agents. |
 | `model` | `sonnet` | Set to another alias for a one-off comparison. |
 | `issuesPath` / `outPath` | `scripts/issue-triage/out/...` | Point at a different dump or output. |
 

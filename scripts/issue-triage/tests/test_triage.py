@@ -348,3 +348,26 @@ def test_fetch_marks_scope_and_writes_both_files(
     assert dump["counts"] == {"open": 3, "untriaged": 2}
     assert [i["in_scope"] for i in dump["issues"]] == [True, True, False]
     assert json.loads(labels_path.read_text())[0]["name"] == "bug"
+
+
+def test_apply_dry_run_reports_missing_labels_but_still_plans(
+    fake_gh: FakeGh, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_gh.labels.discard("effort:S")
+    fake_gh.live[12] = {"labels": []}
+    path = write_proposals(tmp_path, [good()])
+    assert triage.main(["apply", "--repo", "o/r", "--proposals", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "MISSING" in out and "effort:S" in out
+    assert "would +[" in out
+    assert fake_gh.edits() == []
+
+
+def test_apply_reports_already_applied_before_since_dump(
+    fake_gh: FakeGh, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_gh.live[12] = {"labels": list(GOOD_LABELS)}
+    path = write_proposals(tmp_path, [good()])
+    assert triage.main(["apply", "--repo", "o/r", "--proposals", str(path), "--yes"]) == 0
+    assert "already has the proposed labels" in capsys.readouterr().out
+    assert fake_gh.edits() == []

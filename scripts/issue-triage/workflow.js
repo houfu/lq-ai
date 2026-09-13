@@ -10,7 +10,7 @@
 //
 // Shape — small on purpose:
 //   Scope      1 agent    reads the dump, lists the untriaged issues
-//   Screen     1/batch    a Sonnet screener proposes labels for ~10 issues
+//   Screen     1/batch    a Sonnet screener proposes labels for ~8 issues
 //   Challenge  ≤1/batch   a Sonnet skeptic re-checks any good-first-issue /
 //                         help-wanted call in that batch (skipped when none)
 //   Reconcile  1 agent    normalises across batches, writes out/proposals.json
@@ -37,7 +37,7 @@ const cfg = Object.assign(
     labelsPath: 'scripts/issue-triage/out/labels.json',
     outPath: 'scripts/issue-triage/out/proposals.json',
     labelsDoc: 'scripts/issue-triage/LABELS.md',
-    batchSize: 10,
+    batchSize: 8,
     model: 'sonnet',
   },
   args || {},
@@ -139,8 +139,9 @@ Step 3 — Ground every call in the repo before deciding:
 - \`good first issue\` and \`help wanted\` are the consequential calls. Walk their checklists item by item. If any item fails, leave the flag off and name the failing item in the rationale.
 - Security-sensitive paths (.github/CODEOWNERS: gateway/**, .github/workflows/**, docs/security/**, anything auth/audit/crypto) get the \`security\` flag and never \`good first issue\`.
 - Fill \`pointers\` with the files or doc sections a contributor would open first (1–4 entries).
+- Budget: about five tool calls per issue. You are triaging, not fixing; once type, area, effort, priority and the two contributor checklists are settled, move on.
 
-Step 4 — Return one proposal per issue in your batch: all ${batch.length} of them, including low-confidence ones. Set \`remove\` to ["needs-triage"] when the issue currently carries it. Keep \`rationale\` to 1–3 sentences a maintainer can check in ten seconds. Set \`duplicate_of\` only when the same ask exists in another issue in the dump (you may grep titles across the dump); point at the older issue and add the \`duplicate\` flag. Use \`notes_for_maintainer\` for open questions, missing information, or a decision only the maintainer can make.`
+Step 4 — Return one proposal per issue in your batch: all ${batch.length} of them, including low-confidence ones. Set \`remove\` to ["needs-triage"] when the issue currently carries it. Keep \`rationale\` to 1–3 sentences a maintainer can check in ten seconds. Set \`duplicate_of\` only when the same ask exists in another issue in the dump (you may grep titles across the dump); point at the older issue and add the \`duplicate\` flag. Use \`notes_for_maintainer\` (at most three sentences) for open questions, missing information, or a decision only the maintainer can make.`
 
 const challengePrompt = (flagged) => `You are the skeptic in the LQ.AI issue-triage workflow. A screener proposed \`good first issue\` and/or \`help wanted\` for the issues below. Try to REFUTE each flag against the checklists in ${cfg.labelsDoc}; inviting an outside contributor onto the wrong issue costs more than a missing label. ${GUARDRAILS}
 

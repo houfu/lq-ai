@@ -438,7 +438,7 @@ def cmd_apply(args: argparse.Namespace) -> int:
     }
     needed = sorted({lbl for p in rows for lbl in p["labels"]})
     missing = [lbl for lbl in needed if lbl not in existing]
-    if missing and not args.create_missing_labels:
+    if missing and args.yes and not args.create_missing_labels:
         raise TriageError(
             "labels not present in the repo: "
             + ", ".join(missing)
@@ -449,8 +449,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
         for name in missing:
             create_label(args.repo, name)
     elif missing:
-        print(f"[dry-run] would create {len(missing)} missing label(s): {', '.join(missing)}")
-
+        how = "would create" if args.create_missing_labels else "MISSING (run `labels --create`)"
+        print(f"[dry-run] {how} {len(missing)} label(s): {', '.join(missing)}")
     mode = "APPLY" if args.yes else "dry-run"
     print(f"[{mode}] {len(rows)} proposal(s) against {args.repo}\n")
     applied = skipped = failed = 0
@@ -469,17 +469,18 @@ def cmd_apply(args: argparse.Namespace) -> int:
             skipped += 1
             print(f"  #{n:<5} skip  (issue is {live.get('state')})")
             continue
+        add, remove = plan_changes(p, live_names, keep_intake=args.keep_needs_triage)
+        if not add and not remove:
+            skipped += 1
+            print(f"  #{n:<5} skip  (already has the proposed labels)")
+            continue
         still_untriaged, _why = in_scope(live_names)
         if not still_untriaged and not args.force:
             skipped += 1
             print(
-                f"  #{n:<5} skip  (labelled since dump: {', '.join(live_names)}; --force to override)"
+                f"  #{n:<5} skip  (labelled since dump: {', '.join(live_names)}; "
+                "--force to override)"
             )
-            continue
-        add, remove = plan_changes(p, live_names, keep_intake=args.keep_needs_triage)
-        if not add and not remove:
-            skipped += 1
-            print(f"  #{n:<5} skip  (already has proposed labels)")
             continue
         plan = f"+[{', '.join(add)}]" + (f" -[{', '.join(remove)}]" if remove else "")
         if not args.yes:
