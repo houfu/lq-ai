@@ -1,0 +1,27 @@
+name: Start a contribution
+description: Take on your first issue — real code, documentation, or legal work product.
+title: "I'm picking up: "
+labels: ["good-first-issue", "help wanted"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Welcome. Picking up an issue here means contributing to LQ.AI — writing code, documentation, or legal work product that ships to the in-house teams who depend on it.
+
+        You may not have contributed to a project like this before. That's expected, and it's not a barrier: the items on the [good first issues](../docs/contribute/good-first-issues.md) list are scoped so you can own one end to end without having read the whole codebase. Bring the same judgment you bring to your professional work and you're equipped for this.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What are you taking on?
+      description: Name the item from the list, or describe the change you want to make.
+      placeholder: e.g., DPA Checklist Review — adding two worked examples for the Singapore PDPA regime.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: pairing
+    attributes:
+      label: Before you start
+      options:
+        - label: I'd like a maintainer to weigh in on my approach before I open a pull request.
