@@ -9582,8 +9582,9 @@ components:
           description: |
             USD cost estimate (gateway-side, when rate is configured). On a
             tool-loop turn, the same value as `message.cost_estimate`: the
-            sum over every chat-completion round of the tool loop, or NULL
-            when any round was unpriced.
+            sum over every chat-completion round of the tool loop; NULL
+            when any round ran on a model with no configured price, or
+            when the turn resumed from a pause saved without totals.
         applied_skills:
           type: array
           items: {type: string}

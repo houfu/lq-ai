@@ -72,12 +72,13 @@ log = logging.getLogger(__name__)
 
 @dataclass
 class LoopUsage:
-    """Running token and cost totals over every model round of one turn.
+    """Running token and cost totals over every chat-completion round of the tool loop.
 
     A turn that runs the tool loop calls the model several times. Each
     round's tokens and cost are added here, the final no-tools round
-    included, so the reply row records the whole turn and not only the
-    last round.
+    included, so the reply row records every loop round and not only the
+    last one. Other model calls for the turn (the retrieval embedding,
+    citation-judge calls) are not counted here.
 
     Cost is kept as integer USD micros (the unit of
     ``messages.cost_estimate_micros``): each round's float is converted
@@ -149,7 +150,10 @@ class LoopUsage:
         rounds before the pause were never recorded, so the totals cannot
         cover the whole turn: tokens start from zero (a partial count), and
         the cost is marked unknown by counting one unpriced round, so a
-        partial cost is never stored as if it were the whole.
+        partial cost is never stored as if it were the whole. Such a state
+        is read as one unpriced round with a round count of zero, so for
+        that turn ``unpriced_rounds`` can exceed ``rounds``, and ``rounds``
+        counts only the rounds after the resume.
 
         Each key is read with a default of 0; a value that is not a
         non-negative integer reads as 0.
@@ -178,8 +182,9 @@ class LoopFinal:
 
     Carries the full message list so the caller can persist the turn.
 
-    ``usage_prompt`` and ``usage_completion`` are the totals over every
-    round of the turn. ``usage`` holds those totals with the cost and the
+    ``usage_prompt`` and ``usage_completion`` are the totals carried into
+    the loop (from a paused turn's saved state) plus every round the loop
+    ran. ``usage`` holds those totals with the cost and the
     round count; it is ``None`` only when a caller builds a
     :class:`LoopFinal` by hand.
     """

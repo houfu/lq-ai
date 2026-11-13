@@ -3284,7 +3284,7 @@ async def _non_streaming_response(
 
         if isinstance(outcome, LoopFinal):
             # Normal completion — persist exactly like the single-shot path.
-            # Tokens and cost are the totals over every round of the turn.
+            # Tokens and cost are the totals over every round of the tool loop.
             applied_skills = list(outcome.applied_skills or [])
             loop_cost_usd = outcome.usage.cost_usd if outcome.usage else None
             persisted = await _persist_assistant_message(
