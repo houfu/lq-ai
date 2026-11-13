@@ -1,7 +1,7 @@
 # Mutation testing (DE-229)
 
-> **Status:** scoped Python workflow proposed in PR #434; **no CI baseline recorded**.
-> The first valid run after merge establishes the baseline. DE-229 remains partial.
+> **Status:** scoped Python workflow running nightly since PR #434. The first valid CI
+> baseline is recorded for v0.9.1 (see *Score history* below). DE-229 remains partial.
 
 Mutation testing measures whether the selected tests detect small changes in the
 selected source modules. It complements coverage; it is not a security certification
@@ -10,11 +10,12 @@ are credited to @SaifAlYounan (PR #434, replacing #381).
 
 ## Frozen tooling
 
-Each Python subsystem declares `mutmut==3.6.0` in the opt-in `mutation` dependency
-group of its existing `uv.lock`. The normal dev and production installs do not
-select this group. Mutation jobs install application, dev and mutation dependencies
-together from that same reviewed lock, so the tool cannot silently replace the
-application's locked transitive dependencies.
+Each Python subsystem pins an exact mutmut version (3.8.0 at the time of writing)
+in the opt-in `mutation` dependency group of its existing `uv.lock`. The normal dev
+and production installs do not select this group. Mutation jobs install
+application, dev and mutation dependencies together from that same reviewed lock,
+so the tool cannot silently replace the application's locked transitive
+dependencies.
 
 ```bash
 # From api/ or gateway/, in a disposable test environment:
@@ -69,8 +70,12 @@ a release score. Result and diagnostic artifacts are uploaded even on failures
 when the runner remains available; a hard cancellation cannot guarantee upload.
 
 The report validator (`scripts/mutation_report.py`) requires complete raw
-counts plus evidence that tests were recorded. Its isolated regression tests run
-in normal PR CI. Failed measurements are never represented as 0% or 100%.
+counts plus evidence that tests were recorded. It also requires the installed
+mutmut to be the version the package's `uv.lock` pins, reading that version from
+the lock, so a reviewed tool upgrade needs no change to the validator. Its
+isolated regression tests run in normal PR CI; one of them checks that each lock
+matches its `mutation` group pin. Failed measurements are never represented as
+0% or 100%.
 
 ## Measurement contract
 
@@ -95,7 +100,7 @@ diagnostics, not the permanent publication endpoint.
 
 | Date (UTC) | Release | Measured commit | API scoped score | Gateway scoped score | Evidence |
 |---|---|---|---|---|---|
-| — | — | — | No valid CI baseline recorded | — | — |
+| 2026-10-28 | v0.9.1 | `7ce0bb400` (run [40626059899](https://github.com/LegalQuants/lq-ai/actions/runs/40626059899), mutmut 3.8.0) | 50.64% (629 / 1,242) | 46.47% (756 / 1,627) | [API](mutation-baselines/v0.9.1/api/mutation-score.json), [gateway](mutation-baselines/v0.9.1/gateway/mutation-score.json) |
 
 Only validated CI reports (`status: valid` and `measurement_origin: github-actions`)
 enter this table; local validation runs do not establish a published baseline.
@@ -111,7 +116,7 @@ the older number. See [the release procedure](../BUILD-AND-RELEASE.md).
 ## Remaining DE-229 work
 
 The full outstanding checklist lives in [PRD DE-229](../PRD.md#de-229--mutation-testing-in-ci-with-per-release-scores-published):
-first valid CI baseline and review of runtime, seed-path reproduction/repair,
+review of the v0.9.1 baseline's runtime, seed-path reproduction/repair,
 DB-backed auth/audit/citation coverage, the excluded gateway integration suites,
 TypeScript/Stryker, the durable badge/feed publication path, and follow-up tests
 for meaningful survivors. Issue #380 closes with the scoped Python first wave;

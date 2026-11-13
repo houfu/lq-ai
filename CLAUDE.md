@@ -82,7 +82,7 @@ Each subsystem (`api/`, `gateway/`, `web/`) is a self-contained service. They ta
 - **Linter:** ESLint per `.eslintrc`.
 - **TypeScript:** required for new files; legacy `.js` files migrate gradually.
 - **Framework:** SvelteKit. The `web/` subdirectory is a fork of OpenWebUI, which is a SvelteKit app — extensions and customizations stay in Svelte. We do **not** mix React into `web/`. The Word add-in (`word-addin/`, M3) uses Office.js with React; the `web/` codebase does not.
-- **Component conventions:** match the OpenWebUI conventions for shared components; use the project's design system primitives rather than ad-hoc Tailwind.
+- **Component conventions:** match the OpenWebUI conventions for shared components (`web/src/lib/components/**`, untouched per ADR 0009). Within `web/src/lib/lq-ai/**`, prefer the `lq` primitives (`web/src/lib/lq-ai/components/shared/`) and their typed token vocabulary for new or changed components. See [ADR 0043](docs/adr/0043-lq-design-system-primitives.md) for the contract and bounded reference implementation; migration of the remaining shell is separate work.
 
 ### Both
 
@@ -96,11 +96,11 @@ Full conventions in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Testing
 
-Coverage target is 80% across `api/` and `gateway/`. Current PR CI does not enforce a coverage threshold or no-decrease rule.
+Coverage target is 80% for `api/` and 90% for `gateway/` (`docs/PRD.md`). PR CI enforces it as a ratchet (`.github/workflows/ci.yml`): `--cov-fail-under=80` for `api/` and `--cov-fail-under=88` for `gateway/`, each pinned at or below the measured figure so a PR that lowers coverage fails.
 
 - **Unit tests** — fast, no external deps. `pytest` in each subsystem's `tests/` folder.
 - **Integration tests** — run against real Postgres in Docker. Provider integration gated behind `pytest -m provider`.
-- **End-to-end tests** — browser end-to-end coverage is not part of the current PR workflow.
+- **End-to-end tests** — the deterministic Cypress track runs nightly and on manual dispatch (`.github/workflows/e2e.yml`), not on every PR; the live-model track stays opt-in.
 
 Bug fixes include a regression test. New API endpoints include unit tests for handler logic, integration tests for the endpoint, and OpenAPI schema-conformance tests.
 

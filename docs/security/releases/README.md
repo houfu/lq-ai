@@ -2,13 +2,23 @@
 
 > **Scope:** how operators verify that a specific LQ.AI release's container images, SBOM, and SLSA provenance are authentic — i.e., that they were built by the LegalQuants release workflow and not tampered with in transit.
 
+## In short
+
+Every LQ.AI release publishes signed container images, each with its own SBOM and SLSA build-provenance attestation — and you can check all three yourself, not take them on faith.
+
+- **Signature** (cosign): proves an image came from the LegalQuants release workflow and hasn't been altered since.
+- **SBOM**: lists every dependency at build time, for scanning with your own tooling — one per image.
+- **Provenance**: pins each image to the exact commit and workflow that built it. From the first release after v0.7.1 it's signed by an isolated builder job the release workflow can't tamper with — SLSA Build Level 3; earlier releases carry Build Level 2.
+
+None of this proves the software is free of vulnerabilities, or that a release was a deliberate maintainer choice rather than a compromised one — see "What the verification does NOT prove" below. Forks that need operator-key signing (for example, air-gapped deployments without OIDC) must set up and document their own signing identity — see "Operator-key signing (forks)" below.
+
 LQ.AI uses [sigstore keyless signing](https://docs.sigstore.dev/) (cosign + Fulcio + Rekor) and [SLSA build provenance](https://slsa.dev/spec/v1.0/) attestations.
 
 ## Quick verify (single image)
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp "https://github.com/legalquants/lq-ai" \
+  --certificate-identity-regexp '^https://github\.com/LegalQuants/lq-ai/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/legalquants/lq-ai-api:v0.1.0
 ```
@@ -22,7 +32,7 @@ TAG=v0.1.0
 for service in api gateway web proxy; do
   echo "=== ${service} ==="
   cosign verify \
-    --certificate-identity-regexp "https://github.com/legalquants/lq-ai" \
+    --certificate-identity-regexp '^https://github\.com/LegalQuants/lq-ai/' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     "ghcr.io/legalquants/lq-ai-${service}:${TAG}"
 done
@@ -30,12 +40,13 @@ done
 
 ## Verify the SBOM attestation
 
-The SBOM is bound to the image digest as a cosign attestation of type `spdxjson`:
+The SBOM is bound to the image digest as a cosign attestation of type `spdxjson`. Checking it
+needs `cosign`, `jq`, and an SBOM scanner (`grype` below; use your own):
 
 ```bash
 cosign verify-attestation \
   --type spdxjson \
-  --certificate-identity-regexp "https://github.com/legalquants/lq-ai" \
+  --certificate-identity-regexp '^https://github\.com/LegalQuants/lq-ai/' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/legalquants/lq-ai-api:v0.1.0 | jq -r '.payload' | base64 -d | jq '.predicate' > api.spdx.json
 
