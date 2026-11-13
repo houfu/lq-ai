@@ -1,11 +1,12 @@
 """The requests the tool loop sends the gateway, pinned to a recorded file.
 
-``fixtures/tool_loop_requests_golden.json`` was written by running these
-scenarios through ``run_chat_tool_loop`` on the commit before the loop
-was split into rounds (``6457caa5e``). This test runs the same scenarios
-on the current code and compares every request the gateway stub received,
-field by field, and a summary of the outcome. A change to what the loop
-sends, or in what order, fails here.
+``fixtures/tool_loop_requests_golden.json`` holds, for each scenario, every
+request the gateway stub received, dumped as the gateway client sends it
+(:func:`wire_body`: unset fields are left out), the tool calls run, and a
+summary of the outcome. It was first recorded on the commit before the
+loop was split into rounds (``6457caa5e``) and re-recorded in this dump on
+``d12b0377b``; the test passes on that commit's loop source and on the
+split loop. A change to what the loop sends, or in what order, fails here.
 
 To re-record (only when a change to the requests is intended)::
 
@@ -298,19 +299,34 @@ def summarize(outcome: Any) -> dict[str, Any]:
     return summary
 
 
-async def run_scenario(name: str) -> dict[str, Any]:
+def wire_body(request: ChatCompletionRequest) -> dict[str, Any]:
+    """The request as the gateway client sends it.
+
+    The same dump as ``GatewayClient.chat_completion``
+    (``api/app/clients/gateway.py``): unset (``None``) fields are not sent,
+    so a new optional schema field left unset does not change the record.
+    """
+    return request.model_dump(mode="json", exclude_none=True)
+
+
+async def run_scenario(
+    name: str, base_request: ChatCompletionRequest | None = None
+) -> dict[str, Any]:
     """Run one scenario through ``run_chat_tool_loop``; return what was sent."""
     sc = SCENARIOS[name]
     gateway, stack = scenario_patches(sc)
+    kwargs = loop_kwargs(sc, gateway)
+    if base_request is not None:
+        kwargs["base_request"] = base_request
     with stack:
         execute = cast(AsyncMock, tool_loop.execute_tool)
-        outcome = await run_chat_tool_loop(MagicMock(), **loop_kwargs(sc, gateway))
+        outcome = await run_chat_tool_loop(MagicMock(), **kwargs)
         tool_calls = [c.kwargs["args"] for c in execute.call_args_list]
     summary = summarize(outcome)
     return {
         "requests": [
             {
-                "request": c.args[0].model_dump(mode="json"),
+                "request": wire_body(c.args[0]),
                 "request_id": c.kwargs.get("request_id"),
             }
             for c in gateway.chat_completion.call_args_list
@@ -336,3 +352,32 @@ async def test_requests_match_recorded_golden(name: str) -> None:
     golden = json.loads(GOLDEN.read_text())
     got = json.loads(json.dumps(await run_scenario(name), sort_keys=True))
     assert got == golden[name]
+
+
+class _RequestWithNewField(ChatCompletionRequest):
+    """The request schema with one more optional field, as another slice may add."""
+
+    lq_ai_new_field: str | None = None
+
+
+@pytest.mark.asyncio
+async def test_an_unset_new_schema_field_does_not_change_the_record() -> None:
+    golden = json.loads(GOLDEN.read_text())["two_tool_rounds_then_cap"]
+    base = _base_request()
+
+    unset = _RequestWithNewField(**base.model_dump())
+    got = json.loads(json.dumps(await run_scenario("two_tool_rounds_then_cap", unset)))
+    assert got == golden
+
+    # A field that is set is sent, so it shows up in every request, and
+    # only there.
+    set_ = _RequestWithNewField(**base.model_dump(), lq_ai_new_field="x")
+    got = json.loads(json.dumps(await run_scenario("two_tool_rounds_then_cap", set_)))
+    assert got != golden
+    assert len(got["requests"]) == len(golden["requests"]) == 3
+    for sent, recorded in zip(got["requests"], golden["requests"], strict=True):
+        assert sent["request"].pop("lq_ai_new_field") == "x"
+        assert sent == recorded
+    assert {k: v for k, v in got.items() if k != "requests"} == {
+        k: v for k, v in golden.items() if k != "requests"
+    }
