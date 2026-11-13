@@ -1,36 +1,41 @@
 """Agent file format, version 1: parse, validate and fingerprint.
 
-An agent file is Markdown with YAML front matter, the same shape as a
-``SKILL.md``. The front matter holds the fields below; the body is the
-agent's instructions. This module reads the file alone. It does not look
-anything up: whether a named skill exists, whether the operator allows a
-model, or whether a matter permits a tool is the check's job, not this one.
+An agent file is Markdown with YAML front matter, like a ``SKILL.md``. The
+front matter holds the fields below; the body is the agent's instructions.
+This module reads the file alone. It does not look anything up: whether a
+named skill exists, whether the operator allows a model, or whether a matter
+permits a tool is the check's job, not this one.
 
-Two modes:
+The two modes differ only in ``version`` (annex A3 point 17):
 
-* ``store`` is for a file a person pastes or uploads. A ``version`` line is
-  ignored with a notice and removed from the saved text, because the store
-  numbers versions itself.
-* ``repo`` is for files shipped in the repository, which have no store.
-  They may carry ``version``, and their ``model`` must be an alias.
+* ``store`` is for a file a person pastes or uploads. ``version`` is ignored
+  with a notice and its lines are left out of the saved text, because the
+  store numbers versions itself.
+* ``repo`` is for files kept in the repository, which have no store. A
+  ``version`` there is kept and must be a whole number.
 
-Every problem names a field and says what is wrong in plain words. All
-problems are collected, not only the first.
+Every problem names a field and says what is wrong in plain words. Problems
+in the fields are all collected. A file that cannot be read as YAML gets one
+problem, since nothing after the error can be read.
 
 The fingerprint is the SHA-256 of the saved text with line endings
 normalised to ``\\n``. Keys are not reordered and comments are kept, so a
 changed comment is a changed fingerprint.
 
-YAML is read with PyYAML's safe loader, as the skill loader does. Three
-things the safe loader allows are refused here: duplicate keys (the safe
-loader keeps the last one silently), anchors and aliases, and merge keys.
+YAML is read with PyYAML's safe loader, as the skill loader does. Things the
+safe loader allows that are refused here: duplicate keys (it keeps the last
+one silently), anchors and aliases, merge keys, numbers written other than
+as plain digits where a number is asked for, and control or format
+characters.
 """
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import re
-from dataclasses import dataclass, field
+import unicodedata
+from dataclasses import dataclass
 from typing import Any, Final, Literal
 
 import yaml
@@ -40,20 +45,19 @@ from app.errors import ValidationError
 
 # --- Constants ---------------------------------------------------------------
 
-SCHEMA_VERSION: Final = 1
-
 NAME_MAX_LENGTH: Final = 64
-NAME_PATTERN: Final = re.compile(r"^[a-z][a-z0-9-]*$")
+_NAME_PATTERN: Final = re.compile(r"^[a-z][a-z0-9-]*$")
 
 # Skill slugs as the user-skill store accepts them (``app/api/user_skills.py``).
-SKILL_SLUG_PATTERN: Final = re.compile(r"^[a-z0-9]([a-z0-9-]{0,78}[a-z0-9])?$")
+_SKILL_SLUG_PATTERN: Final = re.compile(r"^[a-z0-9]([a-z0-9-]{0,78}[a-z0-9])?$")
 
 # Listed, hand-attached and kept skills together are at most 16 on a turn,
 # so a file that lists more could never run.
 MAX_SKILLS: Final = 16
 
-# The file's name for its rounds limit. The name is not ruled yet; every
-# use reads it from here.
+# The key under ``limits`` that holds the rounds limit. The name is not
+# ruled yet. Every place that reads or names the key uses this constant; the
+# parsed value is ``AgentLimits.max_rounds``, which does not depend on it.
 ROUNDS_LIMIT_FIELD: Final = "max_tool_calls"
 
 MAX_BODY_BYTES: Final = 32 * 1024
@@ -62,18 +66,23 @@ MAX_FRONT_MATTER_BYTES: Final = 16 * 1024
 MAX_FILE_BYTES: Final = MAX_BODY_BYTES + MAX_FRONT_MATTER_BYTES + 1024
 
 MODEL_MAX_LENGTH: Final = 200
+# Printable ASCII other than the space.
+_MODEL_PATTERN: Final = re.compile(r"^[!-~]+$")
 
-KNOWLEDGE_MATTER: Final = "matter"
-KNOWLEDGE_NONE: Final = "none"
-TOOLS_CHAT: Final = "chat"
-TOOLS_NONE: Final = "none"
+# Plain decimal digits: no sign, no leading zero, no `0x`, `_` or `:`.
+_PLAIN_WHOLE_NUMBER: Final = re.compile(r"^[1-9][0-9]*$")
+
+_MATTER: Final = "matter"
+_NONE: Final = "none"
+_CHAT: Final = "chat"
 
 AgentFileMode = Literal["store", "repo"]
 
 _DELIMITER: Final = "---"
-_BOM: Final = "﻿"
+_BOM: Final = "\ufeff"
+_INT_TAG: Final = "tag:yaml.org,2002:int"
+_MERGE_TAG: Final = "tag:yaml.org,2002:merge"
 
-# Fields a version 1 file may carry.
 _KNOWN_FIELDS: Final = frozenset(
     {
         "schema",
@@ -90,36 +99,37 @@ _KNOWN_FIELDS: Final = frozenset(
     }
 )
 
-_SUBAGENTS_WAIT = "It waits for the decision on sub-agents."
+_NOT_SUPPORTED: Final = "is not supported in this version of LQ.AI"
 
-# Names refused with the word "reserved" until their own decisions.
+# Names refused with the word "reserved", with any extra pointer.
 _RESERVED_FIELDS: Final[dict[str, str]] = {
-    "history": "It waits for the history tool.",
-    "workspace": "It waits for the agent's own workspace (Stage 4).",
-    "subagents": _SUBAGENTS_WAIT,
-    "use_as": _SUBAGENTS_WAIT,
+    "history": "",
+    "workspace": "",
+    "subagents": "",
+    "use_as": "",
     "memory": (
-        "For notes the agent keeps, see `workspace`; for earlier messages of "
+        " For notes the agent keeps, see `workspace`; for earlier messages of "
         "this chat, see `history`."
     ),
-    "permissions": "There is no plan for it.",
+    "permissions": "",
 }
+_RESERVED_LIMITS: Final = frozenset(
+    {"max_subagents", "max_subagent_tool_calls", "max_result_chars"}
+)
 
-_RESERVED_LIMITS: Final[dict[str, str]] = {
-    "max_subagents": _SUBAGENTS_WAIT,
-    "max_subagent_tool_calls": _SUBAGENTS_WAIT,
-    "max_result_chars": _SUBAGENTS_WAIT,
-}
-
-_NOT_YET = "is not supported yet in this version of LQ.AI. It is planned for"
+_QUOTE_HINT: Final = (
+    " YAML reads words such as yes, no, on and off, numbers and dates as other "
+    'values. Put the value in quotes, for example `{key}: "{example}"`.'
+)
 
 
 # --- Results -----------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class AgentFileProblem:
-    """One reason a file is refused: the field, and what is wrong with it."""
+class AgentFileNote:
+    """A problem that refuses the file, or a notice about a file that saves:
+    the field it concerns and what to know about it, in plain words."""
 
     field: str
     message: str
@@ -128,28 +138,9 @@ class AgentFileProblem:
         return {"field": self.field, "message": self.message}
 
 
-@dataclass(frozen=True)
-class AgentFileNotice:
-    """Something the validator changed or ignored. The file is still saved."""
-
-    field: str
-    message: str
-
-    def as_dict(self) -> dict[str, str]:
-        return {"field": self.field, "message": self.message}
-
-
-class SkillRef(BaseModel):
-    """One entry of ``skills``: a skill the model may load."""
-
-    model_config = ConfigDict(frozen=True)
-
-    name: str
-    optional: bool = False
-
-
-class KnowledgeRef(BaseModel):
-    """One entry of ``knowledge``. Only ``matter`` is valid in version 1 today."""
+class ListedItem(BaseModel):
+    """One entry of ``skills`` or ``knowledge``: a name, and whether the turn
+    may run without it."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -158,12 +149,12 @@ class KnowledgeRef(BaseModel):
 
 
 class AgentLimits(BaseModel):
-    """``limits``. ``max_tool_calls`` is a limit on rounds; it may only lower
-    the operator's number, which happens at send, not here."""
+    """``limits``. The rounds limit may only lower the operator's number,
+    which happens at send, not here."""
 
     model_config = ConfigDict(frozen=True)
 
-    max_tool_calls: int | None = None
+    max_rounds: int | None = None
 
 
 class AgentFile(BaseModel):
@@ -176,8 +167,8 @@ class AgentFile(BaseModel):
     title: str
     description: str
     model: str | None = None
-    skills: tuple[SkillRef, ...] = ()
-    knowledge: Literal["none"] | tuple[KnowledgeRef, ...]
+    skills: tuple[ListedItem, ...] = ()
+    knowledge: Literal["none"] | tuple[ListedItem, ...]
     tools: Literal["chat"]
     limits: AgentLimits = AgentLimits()
     metadata: dict[str, str] = Field(default_factory=dict)
@@ -187,7 +178,7 @@ class AgentFile(BaseModel):
     """The body, exactly as written. May be empty."""
     text: str
     """The saved text: line endings normalised, and in ``store`` mode
-    without the ``version`` line."""
+    without the ``version`` field."""
     fingerprint: str
     """SHA-256 of :attr:`text`, as 64 lowercase hex characters."""
 
@@ -203,8 +194,8 @@ class AgentFileCheck:
     """The outcome of :func:`validate_agent_file`."""
 
     agent: AgentFile | None
-    problems: tuple[AgentFileProblem, ...] = ()
-    notices: tuple[AgentFileNotice, ...] = field(default=())
+    problems: tuple[AgentFileNote, ...] = ()
+    notices: tuple[AgentFileNote, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -214,7 +205,7 @@ class AgentFileCheck:
 class AgentFileInvalid(ValidationError):
     """An agent file was refused. ``details["problems"]`` lists each one."""
 
-    def __init__(self, problems: tuple[AgentFileProblem, ...]) -> None:
+    def __init__(self, problems: tuple[AgentFileNote, ...]) -> None:
         count = len(problems)
         noun = "problem" if count == 1 else "problems"
         super().__init__(
@@ -222,6 +213,10 @@ class AgentFileInvalid(ValidationError):
             details={"problems": [p.as_dict() for p in problems]},
         )
         self.problems = problems
+
+
+class _YamlRefused(ValidationError):
+    """Front matter that cannot be read. Caught inside this module."""
 
 
 # --- Public functions --------------------------------------------------------
@@ -241,7 +236,7 @@ def fingerprint_agent_text(text: str) -> str:
     return hashlib.sha256(normalise_line_endings(text).encode("utf-8")).hexdigest()
 
 
-def validate_agent_file(text: str, *, mode: AgentFileMode = "store") -> AgentFileCheck:
+def validate_agent_file(text: str, *, mode: AgentFileMode) -> AgentFileCheck:
     """Read an agent file and return the parsed file, or every problem found.
 
     Never raises for a bad file; the problems are in the result.
@@ -249,7 +244,7 @@ def validate_agent_file(text: str, *, mode: AgentFileMode = "store") -> AgentFil
     return _Validator(text, mode).run()
 
 
-def parse_agent_file(text: str, *, mode: AgentFileMode = "store") -> AgentFile:
+def parse_agent_file(text: str, *, mode: AgentFileMode) -> AgentFile:
     """Read an agent file; raise :class:`AgentFileInvalid` if it is refused."""
     check = validate_agent_file(text, mode=mode)
     if check.agent is None:
@@ -257,49 +252,204 @@ def parse_agent_file(text: str, *, mode: AgentFileMode = "store") -> AgentFile:
     return check.agent
 
 
-# --- Implementation ----------------------------------------------------------
+# --- Describing values -------------------------------------------------------
 
 
-def _code(value: object) -> str:
-    """Show a value from the file in a message, short."""
-    shown = repr(value) if not isinstance(value, str) else value
-    if len(shown) > 60:
-        shown = shown[:57] + "..."
-    return f"`{shown}`"
+def _shown(text: str) -> str:
+    """A value from the file, short, between backticks."""
+    if len(text) > 60:
+        text = text[:57] + "..."
+    return f"`{text}`"
 
 
-def _type_word(value: object) -> str:
+def _read_as(value: object) -> str:
+    """What YAML made of a value, in words: "YAML read it as a number"."""
     if value is None:
-        return "nothing"
+        return "it is empty"
     if isinstance(value, bool):
-        return "true or false"
+        return "YAML read it as true or false"
     if isinstance(value, (int, float)):
-        return "a number"
+        return "YAML read it as a number"
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return "YAML read it as a date"
     if isinstance(value, str):
-        return "text"
+        return f"it is {_shown(value)}"
     if isinstance(value, list):
-        return "a list"
+        return "it is a list"
     if isinstance(value, dict):
-        return "a set of fields"
-    return "a date or other value"
+        return "it is a set of fields"
+    return "it is a value that is not text"
 
 
-class _YamlRefused(Exception):
-    """Front matter YAML that the format refuses before it is constructed."""
+def _written(node: yaml.Node | None, value: object) -> str:
+    """How a number was written in the file, for a message."""
+    if isinstance(node, yaml.ScalarNode):
+        if node.style in ("'", '"'):
+            return "it is in quotes; write the number without quotes"
+        if node.value:
+            return f"it is written {_shown(node.value)}"
+    return _read_as(value)
+
+
+def _quote_hint(value: object, key: str, example: str) -> str:
+    if isinstance(value, (bool, int, float, datetime.date)):
+        return _QUOTE_HINT.format(key=key, example=example)
+    return ""
+
+
+def _key_words(key: object) -> str:
+    """A field name from the file, for a message. Never a Python repr."""
+    if isinstance(key, str):
+        return _shown(key)
+    if isinstance(key, bool):
+        return "a field name that YAML read as true or false"
+    if isinstance(key, (int, float)):
+        return f"a field name that YAML read as the number {key}"
+    return "a field name that is not text"
+
+
+def _bad_character(text: str, *, allow_newline: bool, format_too: bool) -> str | None:
+    """Describe the first character not allowed in ``text``, or None.
+
+    Control characters are refused except tab and, where allowed, newline.
+    With ``format_too``, invisible format characters (such as zero-width
+    spaces and right-to-left overrides) and Unicode line separators are
+    refused as well.
+    """
+    for char in text:
+        if char == "\t" or (char == "\n" and allow_newline):
+            continue
+        category = unicodedata.category(char)
+        if category == "Cc" or (format_too and category in ("Cf", "Zl", "Zp")):
+            kind = "a control character" if category == "Cc" else "an invisible character"
+            return f"{kind} (U+{ord(char):04X})"
+    return None
+
+
+# --- Front matter YAML -------------------------------------------------------
+
+
+class _Loader(yaml.SafeLoader):
+    """The safe loader, refusing anchors and aliases as it composes."""
+
+    def compose_node(self, parent: yaml.Node | None, index: int) -> yaml.Node | None:
+        event = self.peek_event()
+        if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None):
+            raise _YamlRefused(
+                "Anchors and aliases (`&` and `*`) are not allowed in an agent file. "
+                "Write each value out."
+            )
+        return super().compose_node(parent, index)
+
+
+def _yaml_problem(exc: yaml.YAMLError) -> str:
+    """Turn a PyYAML error into a sentence a person can act on."""
+    mark = getattr(exc, "problem_mark", None)
+    problem = getattr(exc, "problem", None) or ""
+    # Front matter line n is line n + 2 of the file.
+    where = f"Line {mark.line + 2}" if mark else "The front matter"
+    if "mapping values are not allowed" in problem:
+        return (
+            f"{where} has a colon (`:`) inside a value, which YAML reads as the start "
+            "of a new field. Put the whole value in quotes, for example "
+            '`description: "Use for: NDAs"`.'
+        )
+    if "'\\t'" in problem:
+        return f"{where} uses a tab. Indent the front matter with spaces, not tabs."
+    if isinstance(exc, yaml.constructor.ConstructorError):
+        return (
+            f"{where} uses a YAML tag (a word starting with `!`). Remove it, or put "
+            "the value in quotes."
+        )
+    return (
+        f"{where} cannot be read as YAML. Check the indentation and that every "
+        "bracket and quote is closed. Put any value that contains `:`, `#`, `[`, `{` "
+        "or a quote mark inside quotes."
+    )
+
+
+def _load_front_matter(front: str) -> tuple[yaml.MappingNode | None, object]:
+    """Parse the front matter once, refusing what the format does not allow.
+
+    Returns the composed root node (for line positions and raw scalars) and
+    the constructed data.
+    """
+    loader = _Loader(front)
+    try:
+        root = loader.get_single_node()
+        if root is None:
+            return None, None
+        _check_mappings(root)
+        data = loader.construct_document(root)
+    except _YamlRefused:
+        raise
+    except yaml.YAMLError as exc:
+        raise _YamlRefused(_yaml_problem(exc)) from None
+    except (RecursionError, ValueError, TypeError):
+        raise _YamlRefused(
+            "The front matter cannot be read as YAML. Check the indentation and the values."
+        ) from None
+    finally:
+        loader.dispose()
+    return (root if isinstance(root, yaml.MappingNode) else None), data
+
+
+def _check_mappings(node: yaml.Node) -> None:
+    """Refuse duplicate keys and merge keys anywhere in the tree."""
+    stack: list[yaml.Node] = [node]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, yaml.MappingNode):
+            seen: set[str] = set()
+            for key_node, value_node in current.value:
+                if isinstance(key_node, yaml.ScalarNode):
+                    if key_node.tag == _MERGE_TAG:
+                        raise _YamlRefused("Merge keys (`<<`) are not allowed in an agent file.")
+                    if key_node.value in seen:
+                        line = key_node.start_mark.line + 2
+                        raise _YamlRefused(
+                            f"`{key_node.value}` appears twice (again at line {line}). Keep one."
+                        )
+                    seen.add(key_node.value)
+                stack.append(value_node)
+        elif isinstance(current, yaml.SequenceNode):
+            stack.extend(current.value)
+
+
+def _value_node(mapping: yaml.Node | None, key: str) -> yaml.Node | None:
+    if not isinstance(mapping, yaml.MappingNode):
+        return None
+    for key_node, value_node in mapping.value:
+        if isinstance(key_node, yaml.ScalarNode) and key_node.value == key:
+            return value_node
+    return None
+
+
+def _is_plain_whole_number(node: yaml.Node | None) -> bool:
+    """True when YAML read an integer from plain decimal digits."""
+    return (
+        isinstance(node, yaml.ScalarNode)
+        and node.tag == _INT_TAG
+        and bool(_PLAIN_WHOLE_NUMBER.fullmatch(node.value))
+    )
+
+
+# --- The validator -----------------------------------------------------------
 
 
 class _Validator:
     def __init__(self, text: str, mode: AgentFileMode) -> None:
         self.raw = text
         self.mode = mode
-        self.problems: list[AgentFileProblem] = []
-        self.notices: list[AgentFileNotice] = []
+        self.problems: list[AgentFileNote] = []
+        self.notices: list[AgentFileNote] = []
+        self.root: yaml.MappingNode | None = None
 
     def problem(self, field_name: str, message: str) -> None:
-        self.problems.append(AgentFileProblem(field_name, message))
+        self.problems.append(AgentFileNote(field_name, message))
 
     def fail(self) -> AgentFileCheck:
-        return AgentFileCheck(agent=None, problems=tuple(self.problems), notices=())
+        return AgentFileCheck(agent=None, problems=tuple(self.problems))
 
     # The steps run in order; a step that cannot go on returns a refusal.
     def run(self) -> AgentFileCheck:
@@ -321,8 +471,8 @@ class _Validator:
         if self.raw.startswith(_BOM):
             self.problem(
                 "file",
-                "The file starts with an invisible byte-order mark. Remove it: "
-                "the first line must be `---`.",
+                "The file starts with an invisible byte-order mark, which some editors "
+                "add. Remove it: the first line must be `---`.",
             )
             return self.fail()
 
@@ -346,48 +496,38 @@ class _Validator:
             )
             return self.fail()
 
-        front_lines = lines[1:close]
-        front = "\n".join(front_lines)
+        front = "\n".join(lines[1:close])
         body = "\n".join(lines[close + 1 :])
-
-        front_size = len(front.encode("utf-8"))
-        if front_size > MAX_FRONT_MATTER_BYTES:
-            self.problem(
-                "front matter",
-                f"The front matter is {front_size} bytes; it may be at most "
-                f"{MAX_FRONT_MATTER_BYTES} bytes.",
-            )
-        body_size = len(body.encode("utf-8"))
-        if body_size > MAX_BODY_BYTES:
-            self.problem(
-                "body",
-                f"The instructions are {body_size} bytes; they may be at most "
-                f"{MAX_BODY_BYTES} bytes (32 KB).",
-            )
+        self._check_sizes_and_characters(lines, close, front, body)
         if self.problems:
             return self.fail()
 
         try:
             root, data = _load_front_matter(front)
         except _YamlRefused as exc:
-            self.problem("front matter", str(exc))
+            self.problem("front matter", exc.message)
             return self.fail()
+        self.root = root
 
         if data is None:
             data = {}
         if not isinstance(data, dict):
             self.problem(
                 "front matter",
-                f"The front matter must be a set of fields such as `name: my-agent`; "
-                f"it is {_type_word(data)}.",
+                "The front matter must be a set of fields such as `name: my-agent`, "
+                f"but {_read_as(data)}.",
             )
+            return self.fail()
+
+        self._check_parsed_text(data, "")
+        if self.problems:
             return self.fail()
 
         saved_text = text
         version: int | None = None
         if "version" in data:
             if self.mode == "store":
-                saved_text = self._strip_version(lines, root)
+                saved_text = self._without_version(lines, text)
             else:
                 version = self._repo_version(data["version"])
 
@@ -404,42 +544,90 @@ class _Validator:
                 "fingerprint": fingerprint_agent_text(saved_text),
             }
         )
-        return AgentFileCheck(agent=agent, problems=(), notices=tuple(self.notices))
+        return AgentFileCheck(agent=agent, notices=tuple(self.notices))
+
+    # --- sizes and characters --------------------------------------------
+
+    def _check_sizes_and_characters(
+        self, lines: list[str], close: int, front: str, body: str
+    ) -> None:
+        front_size = len(front.encode("utf-8"))
+        if front_size > MAX_FRONT_MATTER_BYTES:
+            self.problem(
+                "front matter",
+                f"The front matter is {front_size} bytes; it may be at most "
+                f"{MAX_FRONT_MATTER_BYTES} bytes.",
+            )
+        body_size = len(body.encode("utf-8"))
+        if body_size > MAX_BODY_BYTES:
+            self.problem(
+                "body",
+                f"The instructions are {body_size} bytes; they may be at most "
+                f"{MAX_BODY_BYTES} bytes (32 KB).",
+            )
+        # Raw text: comments and the body included, so nothing unsaveable is
+        # kept in the saved text.
+        for number, line in enumerate(lines, start=1):
+            in_front = number - 1 < close
+            bad = _bad_character(line, allow_newline=False, format_too=in_front)
+            if bad:
+                where = "front matter" if in_front else "body"
+                self.problem(where, f"Line {number} contains {bad}. Remove it.")
+
+    def _check_parsed_text(self, value: object, where: str) -> None:
+        """Values can carry characters through YAML escapes such as ``\\0``."""
+        if isinstance(value, str):
+            bad = _bad_character(value, allow_newline=True, format_too=True)
+            if bad:
+                self.problem(where or "front matter", f"The value contains {bad}. Remove it.")
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                name = key if isinstance(key, str) else "front matter"
+                if isinstance(key, str):
+                    self._check_parsed_text(key, where or "front matter")
+                self._check_parsed_text(item, f"{where}.{name}" if where else name)
+        elif isinstance(value, list):
+            for i, item in enumerate(value):
+                self._check_parsed_text(item, f"{where}[{i}]")
 
     # --- version ---------------------------------------------------------
 
-    def _strip_version(self, lines: list[str], root: yaml.MappingNode | None) -> str:
-        """Remove the ``version`` field's lines from the saved text."""
-        assert root is not None
-        if root.flow_style:
+    def _without_version(self, lines: list[str], text: str) -> str:
+        """The saved text without the ``version`` field (annex A3 point 17)."""
+        root = self.root
+        if root is None or root.flow_style:
             self.problem(
                 "version",
-                "`version` is set by the store, so it is removed from a pasted file. "
-                "Write each field on its own line, or delete `version` yourself.",
+                "This file writes its fields on one line, between `{` and `}`, so "
+                "`version` cannot be left out of it here. The store numbers versions "
+                "itself: delete `version`, or write each field on its own line.",
             )
-            return "\n".join(lines)
+            return text
         # In a block mapping each key starts on a line of its own, so the
         # field's lines run from its key to the end of its value. Front
         # matter line n is text line n + 1 (line 0 is `---`).
-        key_node, value_node = next(
-            (k, v) for k, v in root.value if getattr(k, "value", None) == "version"
-        )
-        v_start = key_node.start_mark.line + 1
-        end_mark = value_node.end_mark
-        v_end = max(v_start, end_mark.line + 1 if end_mark.column > 0 else end_mark.line)
-        self.notices.append(
-            AgentFileNotice(
-                "version",
-                "`version` is ignored: the store numbers each saved version. "
-                "The line was removed from the saved text.",
-            )
-        )
-        return "\n".join(lines[:v_start] + lines[v_end + 1 :])
+        for key_node, value_node in root.value:
+            if isinstance(key_node, yaml.ScalarNode) and key_node.value == "version":
+                start = key_node.start_mark.line + 1
+                end_mark = value_node.end_mark
+                end = max(start, end_mark.line + 1 if end_mark.column > 0 else end_mark.line)
+                self.notices.append(
+                    AgentFileNote(
+                        "version",
+                        "`version` is ignored: the store numbers each saved version. "
+                        "It is left out of the saved text.",
+                    )
+                )
+                return "\n".join(lines[:start] + lines[end + 1 :])
+        return text
 
     def _repo_version(self, value: object) -> int | None:
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        node = _value_node(self.root, "version")
+        if not _is_plain_whole_number(node) or not isinstance(value, int):
             self.problem(
-                "version", f"`version` must be a whole number, 1 or more; it is {_code(value)}."
+                "version",
+                f"`version` must be a whole number, 1 or more, in plain digits, such as "
+                f"`version: 1`, but {_written(node, value)}.",
             )
             return None
         return value
@@ -451,11 +639,12 @@ class _Validator:
         for key in data:
             if not isinstance(key, str):
                 self.problem(
-                    "front matter", f"Field names must be text; {_code(key)} is {_type_word(key)}."
+                    "front matter",
+                    f"Each field name must be text, but the file has {_key_words(key)}.",
                 )
             elif key in _RESERVED_FIELDS:
                 self.problem(
-                    key, f"`{key}` is reserved and cannot be saved yet. {_RESERVED_FIELDS[key]}"
+                    key, f"`{key}` is reserved: it {_NOT_SUPPORTED}.{_RESERVED_FIELDS[key]}"
                 )
             elif key == "author":
                 self.problem(
@@ -464,7 +653,7 @@ class _Validator:
                     "under `metadata`, for example `metadata: {author: Jane Tan}`.",
                 )
             elif key not in _KNOWN_FIELDS:
-                self.problem(key, f"`{key}` is not a field of an agent file (schema 1).")
+                self.problem(key, f"`{key}` is not a field of an agent file.")
 
         self._schema(data, out)
         self._name(data, out)
@@ -484,15 +673,16 @@ class _Validator:
         if "schema" not in data:
             self.problem("schema", "`schema` is required. Add the line `schema: 1`.")
             return
-        value = data["schema"]
-        if isinstance(value, bool) or value != SCHEMA_VERSION or not isinstance(value, int):
+        node = _value_node(self.root, "schema")
+        if not _is_plain_whole_number(node) or data["schema"] != 1:
             self.problem(
                 "schema",
-                f"`schema` must be the number 1; it is {_code(value)}. "
-                "This version of LQ.AI reads schema 1 only.",
+                "`schema` must be the number 1, written `schema: 1`, "
+                f"but {_written(node, data['schema'])}. This version of LQ.AI reads "
+                "schema 1 only.",
             )
             return
-        out["schema"] = SCHEMA_VERSION
+        out["schema"] = 1
 
     def _name(self, data: dict[Any, Any], out: dict[str, Any]) -> None:
         if "name" not in data:
@@ -500,7 +690,11 @@ class _Validator:
             return
         value = data["name"]
         if not isinstance(value, str):
-            self.problem("name", f"`name` must be text; it is {_type_word(value)}.")
+            self.problem(
+                "name",
+                f"`name` must be text, but {_read_as(value)}."
+                + _quote_hint(value, "name", "my-agent"),
+            )
             return
         if len(value) > NAME_MAX_LENGTH:
             self.problem(
@@ -508,10 +702,10 @@ class _Validator:
                 f"`name` is {len(value)} characters; it may be at most {NAME_MAX_LENGTH}.",
             )
             return
-        if not NAME_PATTERN.fullmatch(value):
+        if not _NAME_PATTERN.fullmatch(value):
             self.problem(
                 "name",
-                f"`name` is {_code(value)}. Use lowercase letters, digits and hyphens, "
+                f"`name` is {_shown(value)}. Use lowercase letters, digits and hyphens, "
                 "starting with a letter, for example `nda-comparer`.",
             )
             return
@@ -528,12 +722,14 @@ class _Validator:
         if not isinstance(value, str):
             self.problem(
                 key,
-                f"`{key}` must be text; it is {_type_word(value)}. Put it in quotes if it "
-                "looks like a number or a date.",
+                f"`{key}` must be text, but {_read_as(value)}." + _quote_hint(value, key, "..."),
             )
             return
         if not value.strip():
             self.problem(key, f"`{key}` is empty.")
+            return
+        if key == "title" and "\n" in value.strip():
+            self.problem("title", "`title` must be one line.")
             return
         out[key] = value
 
@@ -544,20 +740,23 @@ class _Validator:
         if not isinstance(value, dict):
             self.problem(
                 "metadata",
-                f"`metadata` must be a set of fields, each one text; it is {_type_word(value)}.",
+                f"`metadata` must be a set of fields, each one text, but {_read_as(value)}.",
             )
             return
         result: dict[str, str] = {}
         for key, item in value.items():
             if not isinstance(key, str):
                 self.problem(
-                    "metadata", f"Field names under `metadata` must be text; {_code(key)} is not."
+                    "metadata",
+                    f"Each field name under `metadata` must be text, but the file has "
+                    f"{_key_words(key)}.",
                 )
                 continue
             if not isinstance(item, str):
                 self.problem(
                     f"metadata.{key}",
-                    f"`metadata.{key}` must be text; it is {_type_word(item)}. Put it in quotes.",
+                    f"`metadata.{key}` must be text, but {_read_as(item)}."
+                    + _quote_hint(item, key, "..."),
                 )
                 continue
             result[key] = item
@@ -574,29 +773,29 @@ class _Validator:
             )
             return
         if not isinstance(value, str):
-            self.problem("model", f"`model` must be text; it is {_type_word(value)}.")
+            self.problem(
+                "model",
+                f"`model` must be text, but {_read_as(value)}."
+                + _quote_hint(value, "model", "local"),
+            )
             return
         if (
-            not value
-            or len(value) > MODEL_MAX_LENGTH
-            or any(c.isspace() for c in value)
+            len(value) > MODEL_MAX_LENGTH
+            or not _MODEL_PATTERN.fullmatch(value)
             or value.startswith("/")
             or value.endswith("/")
             or "//" in value
         ):
             self.problem(
                 "model",
-                f"`model` is {_code(value)}. Use a model alias such as `local`, or "
-                "`provider/model`, with no spaces.",
+                f"`model` is {_shown(value)}. Use a model alias such as `local`, or "
+                f"`provider/model`: plain letters, digits and punctuation, no spaces, at "
+                f"most {MODEL_MAX_LENGTH} characters.",
             )
             return
-        if self.mode == "repo" and "/" in value:
-            self.problem(
-                "model",
-                f"`model` is {_code(value)}. A file shipped in the repository names a "
-                "model alias, such as `local`, not `provider/model`.",
-            )
-            return
+        # Annex A1: contributed agent files name aliases only. That rule belongs
+        # to the check for contributed agents when it is built; it is not
+        # applied in either mode here.
         out["model"] = value
 
     def _skills(self, data: dict[Any, Any], out: dict[str, Any]) -> None:
@@ -606,8 +805,8 @@ class _Validator:
         if not isinstance(value, list):
             self.problem(
                 "skills",
-                f"`skills` must be a list, for example `skills: [nda-snapshot]`; "
-                f"it is {_type_word(value)}.",
+                f"`skills` must be a list, for example `skills: [nda-snapshot]`, "
+                f"but {_read_as(value)}.",
             )
             return
         if len(value) > MAX_SKILLS:
@@ -616,7 +815,7 @@ class _Validator:
                 f"`skills` lists {len(value)} skills; at most {MAX_SKILLS} can be used on a turn.",
             )
             return
-        refs: list[SkillRef] = []
+        refs: list[ListedItem] = []
         seen: set[str] = set()
         ok = True
         for i, item in enumerate(value):
@@ -624,113 +823,113 @@ class _Validator:
             ref = self._skill_item(where, item)
             if ref is None:
                 ok = False
-                continue
-            if ref.name in seen:
+            elif ref.name in seen:
                 self.problem(where, f"`{ref.name}` is listed twice.")
                 ok = False
-                continue
-            seen.add(ref.name)
-            refs.append(ref)
+            else:
+                seen.add(ref.name)
+                refs.append(ref)
         if ok:
             out["skills"] = tuple(refs)
 
-    def _skill_item(self, where: str, item: object) -> SkillRef | None:
+    def _skill_item(self, where: str, item: object) -> ListedItem | None:
         optional = False
         if isinstance(item, dict):
-            mapping = item
-            if "always" in mapping:
+            if "always" in item:
                 self.problem(
                     f"{where}.always",
-                    "`always` is reserved and cannot be saved yet. No skill is always loaded "
-                    "in schema 1; the instructions can say which skill to load first.",
+                    f"`always` is reserved: it {_NOT_SUPPORTED}. The instructions can say "
+                    "which skill to load first.",
                 )
                 return None
-            for key in mapping:
+            for key in item:
                 if key not in ("name", "optional"):
                     self.problem(
-                        f"{where}",
-                        f"{_code(key)} is not a field of a skill entry. Use `name` and, "
-                        "if you want, `optional`.",
+                        where,
+                        f"A skill entry has {_key_words(key)}, which is not one of its "
+                        "fields. Use `name` and, if you want, `optional`.",
                     )
                     return None
-            if "name" not in mapping:
+            if "name" not in item:
                 self.problem(where, "A skill entry needs a `name`.")
                 return None
-            optional_value = mapping.get("optional", False)
+            optional_value = item.get("optional", False)
             if not isinstance(optional_value, bool):
                 self.problem(
                     f"{where}.optional",
-                    f"`optional` must be `true` or `false`; it is {_code(optional_value)}.",
+                    f"`optional` must be `true` or `false`, but {_read_as(optional_value)}.",
                 )
                 return None
             optional = optional_value
-            item = mapping["name"]
+            item = item["name"]
         if not isinstance(item, str):
             self.problem(
                 where,
-                f"Each skill is a skill's name, or `{{name: ..., optional: true}}`; "
-                f"this one is {_type_word(item)}.",
+                "Each skill is a skill's name, or `{name: ..., optional: true}`, "
+                f"but {_read_as(item)}." + _quote_hint(item, "name", "..."),
             )
             return None
-        if not SKILL_SLUG_PATTERN.fullmatch(item):
+        if not _SKILL_SLUG_PATTERN.fullmatch(item):
             self.problem(
                 where,
-                f"{_code(item)} is not a skill name. Skill names use lowercase letters, "
+                f"{_shown(item)} is not a skill name. Skill names use lowercase letters, "
                 "digits and hyphens, for example `nda-snapshot`.",
             )
             return None
-        return SkillRef(name=item, optional=optional)
+        return ListedItem(name=item, optional=optional)
 
     def _knowledge(self, data: dict[Any, Any], out: dict[str, Any]) -> None:
         if "knowledge" not in data:
-            out["knowledge"] = (KnowledgeRef(name=KNOWLEDGE_MATTER),)
+            out["knowledge"] = (ListedItem(name=_MATTER),)
             return
         value = data["knowledge"]
-        if value == KNOWLEDGE_NONE:
-            out["knowledge"] = KNOWLEDGE_NONE
+        if value == _NONE:
+            out["knowledge"] = _NONE
+            return
+        if value is None or value == []:
+            self.problem(
+                "knowledge",
+                "`knowledge` is empty. Write `knowledge: none` to search nothing, or "
+                "`knowledge: [matter]` to search the matter's knowledge.",
+            )
             return
         if not isinstance(value, list):
             self.problem(
                 "knowledge",
-                f"`knowledge` must be `none` or a list such as `[matter]`; it is {_code(value)}.",
+                f"`knowledge` must be `none` or a list such as `[matter]`, but {_read_as(value)}.",
             )
             return
-        if not value:
-            self.problem(
-                "knowledge",
-                "`knowledge` is an empty list. To search nothing, write `knowledge: none`.",
-            )
-            return
-        refs: list[KnowledgeRef] = []
+        refs: list[ListedItem] = []
         ok = True
         for i, item in enumerate(value):
             where = f"knowledge[{i}]"
-            if item == KNOWLEDGE_NONE:
+            if item == _NONE:
                 self.problem(where, "`none` stands alone: write `knowledge: none`, not a list.")
                 ok = False
-            elif item == KNOWLEDGE_MATTER:
-                if any(r.name == KNOWLEDGE_MATTER for r in refs):
+            elif item == _MATTER:
+                if refs:
                     self.problem(where, "`matter` is listed twice.")
                     ok = False
                 else:
-                    refs.append(KnowledgeRef(name=KNOWLEDGE_MATTER))
-            elif isinstance(item, dict) and item.get("name") == KNOWLEDGE_MATTER:
+                    refs.append(ListedItem(name=_MATTER))
+            elif isinstance(item, dict) and item.get("name") == _MATTER:
                 self.problem(
                     where,
                     "`matter` cannot be optional, and needs no fields: write `matter`.",
                 )
                 ok = False
             elif isinstance(item, (str, dict)):
+                # Marking the item `optional` does not let it save (annex A5(a),
+                # refused until ruled otherwise).
                 self.problem(
                     where,
-                    f"Naming a knowledge base {_NOT_YET} Stage 2 of the agent builder. "
-                    "Use `matter`, or `none`.",
+                    f"Naming a knowledge base {_NOT_SUPPORTED}. Use `matter`, or `none`.",
                 )
                 ok = False
             else:
                 self.problem(
                     where,
-                    f"Each `knowledge` item is `matter`; this one is {_type_word(item)}.",
+                    f"Each `knowledge` item is `matter`, but {_read_as(item)}.",
                 )
                 ok = False
         if ok:
@@ -744,29 +943,22 @@ class _Validator:
             )
             return
         value = data["tools"]
-        if value == TOOLS_CHAT:
-            out["tools"] = TOOLS_CHAT
-            return
-        if value == TOOLS_NONE:
+        if value == _CHAT:
+            out["tools"] = _CHAT
+        elif value == _NONE:
+            self.problem("tools", f"`tools: none` {_NOT_SUPPORTED}. Use `tools: chat`.")
+        elif isinstance(value, list) and any(item in (_CHAT, _NONE) for item in value):
             self.problem(
                 "tools",
-                f"`tools: none` {_NOT_YET} Stage 3 of the agent builder. Use `tools: chat`.",
+                "`chat` and `none` stand alone and cannot be part of a list. Write `tools: chat`.",
             )
-            return
-        if isinstance(value, list):
-            if any(item in (TOOLS_CHAT, TOOLS_NONE) for item in value):
-                self.problem(
-                    "tools",
-                    "`chat` and `none` stand alone and cannot be part of a list. "
-                    "Write `tools: chat`.",
-                )
-                return
+        elif isinstance(value, list):
+            self.problem("tools", f"A list of tools {_NOT_SUPPORTED}. Use `tools: chat`.")
+        else:
             self.problem(
                 "tools",
-                f"A list of tools {_NOT_YET} Stage 3 of the agent builder. Use `tools: chat`.",
+                f"`tools` must be `chat`, but {_read_as(value)}. Write `tools: chat`.",
             )
-            return
-        self.problem("tools", f"`tools` must be `chat`; it is {_code(value)}.")
 
     def _limits(self, data: dict[Any, Any], out: dict[str, Any]) -> None:
         if "limits" not in data:
@@ -776,112 +968,40 @@ class _Validator:
             self.problem(
                 "limits",
                 f"`limits` must be a set of fields, for example "
-                f"`limits: {{{ROUNDS_LIMIT_FIELD}: 6}}`; it is {_type_word(value)}.",
+                f"`limits: {{{ROUNDS_LIMIT_FIELD}: 6}}`, but {_read_as(value)}.",
             )
             return
         ok = True
         for key in value:
-            where = f"limits.{key}"
-            if key in _RESERVED_LIMITS:
+            if not isinstance(key, str):
                 self.problem(
-                    where, f"`{where}` is reserved and cannot be saved yet. {_RESERVED_LIMITS[key]}"
+                    "limits",
+                    f"`limits` has {_key_words(key)}. The one limit is `{ROUNDS_LIMIT_FIELD}`.",
                 )
+                ok = False
+            elif key in _RESERVED_LIMITS:
+                self.problem(f"limits.{key}", f"`limits.{key}` is reserved: it {_NOT_SUPPORTED}.")
                 ok = False
             elif key != ROUNDS_LIMIT_FIELD:
                 self.problem(
-                    where,
-                    f"{_code(key)} is not a limit. The one limit is `{ROUNDS_LIMIT_FIELD}`.",
+                    f"limits.{key}",
+                    f"`{key}` is not a limit. The one limit is `{ROUNDS_LIMIT_FIELD}`.",
                 )
                 ok = False
         rounds: int | None = None
         if ROUNDS_LIMIT_FIELD in value:
             limit = value[ROUNDS_LIMIT_FIELD]
-            if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            node = _value_node(_value_node(self.root, "limits"), ROUNDS_LIMIT_FIELD)
+            if not _is_plain_whole_number(node) or not isinstance(limit, int):
                 self.problem(
                     f"limits.{ROUNDS_LIMIT_FIELD}",
                     f"`{ROUNDS_LIMIT_FIELD}` is the most rounds a turn may take: a whole "
-                    f"number, 1 or more. It is {_code(limit)}.",
+                    f"number, 1 or more, in plain digits, such as `{ROUNDS_LIMIT_FIELD}: 6`, "
+                    f"but {_written(node, limit)}.",
                 )
                 ok = False
             else:
+                # No upper bound at save (annex A3 point 11: clamped at send).
                 rounds = limit
         if ok:
-            out["limits"] = AgentLimits(max_tool_calls=rounds)
-
-
-def _load_front_matter(front: str) -> tuple[yaml.MappingNode | None, object]:
-    """Parse the front matter, refusing what the format does not allow.
-
-    Returns the composed root node (for line positions) and the loaded data.
-    """
-    try:
-        for event in yaml.parse(front, Loader=yaml.SafeLoader):
-            if isinstance(event, yaml.AliasEvent) or getattr(event, "anchor", None):
-                raise _YamlRefused(
-                    "Anchors and aliases (`&` and `*`) are not allowed in an agent file. "
-                    "Write each value out."
-                )
-        root = yaml.compose(front, Loader=yaml.SafeLoader)
-        if root is not None:
-            _check_mappings(root)
-        data = yaml.safe_load(front)
-    except _YamlRefused:
-        raise
-    except yaml.MarkedYAMLError as exc:
-        mark = exc.problem_mark
-        # Front matter line n is line n + 2 of the file.
-        where = f" at line {mark.line + 2}, column {mark.column + 1}" if mark else ""
-        reason = exc.problem or "it cannot be read"
-        raise _YamlRefused(f"The front matter is not valid YAML{where}: {reason}.") from None
-    except yaml.YAMLError:
-        raise _YamlRefused("The front matter is not valid YAML.") from None
-    except (RecursionError, ValueError, TypeError):
-        raise _YamlRefused("The front matter is not valid YAML.") from None
-    if root is not None and not isinstance(root, yaml.MappingNode):
-        return None, data
-    return root, data
-
-
-def _check_mappings(node: yaml.Node) -> None:
-    """Refuse duplicate keys and merge keys anywhere in the tree."""
-    stack: list[yaml.Node] = [node]
-    while stack:
-        current = stack.pop()
-        if isinstance(current, yaml.MappingNode):
-            seen: set[str] = set()
-            for key_node, value_node in current.value:
-                if isinstance(key_node, yaml.ScalarNode):
-                    if key_node.tag == "tag:yaml.org,2002:merge":
-                        raise _YamlRefused("Merge keys (`<<`) are not allowed in an agent file.")
-                    key = key_node.value
-                    if key in seen:
-                        line = key_node.start_mark.line + 2
-                        raise _YamlRefused(f"`{key}` appears twice (again at line {line}).")
-                    seen.add(key)
-                stack.append(value_node)
-        elif isinstance(current, yaml.SequenceNode):
-            stack.extend(current.value)
-
-
-__all__ = [
-    "MAX_BODY_BYTES",
-    "MAX_FILE_BYTES",
-    "MAX_FRONT_MATTER_BYTES",
-    "MAX_SKILLS",
-    "NAME_MAX_LENGTH",
-    "ROUNDS_LIMIT_FIELD",
-    "SCHEMA_VERSION",
-    "AgentFile",
-    "AgentFileCheck",
-    "AgentFileInvalid",
-    "AgentFileMode",
-    "AgentFileNotice",
-    "AgentFileProblem",
-    "AgentLimits",
-    "KnowledgeRef",
-    "SkillRef",
-    "fingerprint_agent_text",
-    "normalise_line_endings",
-    "parse_agent_file",
-    "validate_agent_file",
-]
+            out["limits"] = AgentLimits(max_rounds=rounds)

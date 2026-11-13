@@ -1,16 +1,15 @@
 ---
 schema: 1
-version: 1                  # repository files carry a version; a pasted one is ignored
 name: contract-first-read
 description: >
   Gives a first read of one commercial contract the user attaches:
   what kind of contract it is, the main terms, and what to check next.
+model: local
 skills:
   - contract-snapshot
   - {name: msa-snapshot, optional: true}
 knowledge: none             # works from the attached contract only
 tools: chat
-limits: {max_tool_calls: 6} # fewer rounds than the operator's limit
 metadata:
   author: LegalQuants
   jurisdiction: agnostic

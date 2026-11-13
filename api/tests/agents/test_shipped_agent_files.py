@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agents import KnowledgeRef, SkillRef, parse_agent_file, validate_agent_file
+from app.agents import ListedItem, parse_agent_file, validate_agent_file
 
 AGENTS_DIR = Path(__file__).resolve().parents[3] / "agents"
 DEFAULT_AGENT = AGENTS_DIR / "lq-ai.md"
@@ -21,7 +21,7 @@ PINNED_FINGERPRINTS = {
     "lq-ai.md": "b1d1aa5b561f0fe0f0e2da632cd9827317f0948a559a16e7e3de28516b6f6ee6",
     "examples/nda-comparer.md": "745f4d4b48f0eacdcf55220641992eb6a46435c3b0ef891ec4fece368b4b41a6",
     "examples/contract-first-read.md": (
-        "2d1192a6cc12cdaa3db1e841c0462db550f31706fe4382136fc298509f3a7b4a"
+        "18b170328272024893920ad084b78f96fab7a058224739d92eeebc264d978d31"
     ),
 }
 
@@ -50,8 +50,13 @@ def test_every_shipped_file_validates_in_repo_mode(path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", shipped_files(), ids=lambda p: p.name)
-def test_every_shipped_file_also_saves_when_pasted(path: Path) -> None:
-    assert validate_agent_file(read(path), mode="store").agent is not None
+def test_every_shipped_file_has_the_same_saved_text_in_both_modes(path: Path) -> None:
+    store = validate_agent_file(read(path), mode="store")
+    repo = validate_agent_file(read(path), mode="repo")
+    assert store.agent is not None and repo.agent is not None
+    assert store.notices == ()
+    assert store.agent.text == repo.agent.text
+    assert store.agent.fingerprint == repo.agent.fingerprint
 
 
 @pytest.mark.parametrize(("relative", "expected"), sorted(PINNED_FINGERPRINTS.items()))
@@ -83,23 +88,27 @@ def test_nda_comparer_is_the_plans_example() -> None:
     assert agent.name == "nda-comparer"
     assert agent.title == "NDA Comparer"
     assert agent.model == "local"
-    assert agent.skills == (SkillRef(name="nda-snapshot"),)
-    assert agent.knowledge == (KnowledgeRef(name="matter"),)
+    assert agent.skills == (ListedItem(name="nda-snapshot"),)
+    assert agent.knowledge == (ListedItem(name="matter"),)
     assert agent.tools == "chat"
     assert agent.has_instructions
 
 
 def test_second_example_exercises_other_fields() -> None:
     agent = parse_agent_file(read(EXAMPLES_DIR / "contract-first-read.md"), mode="repo")
-    assert agent.version == 1
+    assert agent.version is None
     assert agent.title == agent.name
-    assert agent.model is None
+    # The listed skills need tier 2 or stronger; `local` is tier 1 on the
+    # stock configuration, so the example runs as shipped.
+    assert agent.model == "local"
     assert agent.skills == (
-        SkillRef(name="contract-snapshot"),
-        SkillRef(name="msa-snapshot", optional=True),
+        ListedItem(name="contract-snapshot"),
+        ListedItem(name="msa-snapshot", optional=True),
     )
     assert agent.knowledge == "none"
-    assert agent.limits.max_tool_calls == 6
+    # `limits` is left out of shipped files while its key's name is not ruled.
+    assert agent.limits.max_rounds is None
+    assert "limits" not in agent.text
     assert agent.metadata == {"author": "LegalQuants", "jurisdiction": "agnostic"}
 
 
