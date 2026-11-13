@@ -87,6 +87,7 @@ from app.chat.tool_loop import (
     LoopConfirmation,
     LoopFinal,
     LoopMcpAuth,
+    LoopUsage,
     ToolSourceRecord,
     run_chat_tool_loop,
 )
@@ -2254,6 +2255,9 @@ async def resume_tool_call(
     calls_used: int = int(resume_state.get("calls_used", 0))
     model: str = str(resume_state.get("model", "smart"))
     resumed_skills: list[str] = list(resume_state.get("skill_names", []))
+    # Token and cost totals of the rounds before the pause; a turn paused
+    # before these were saved resumes from zero.
+    resumed_usage = LoopUsage.from_state(resume_state.get("usage"))
 
     request_id = (
         request.headers.get("x-request-id")
@@ -2449,6 +2453,7 @@ async def resume_tool_call(
                 calls_used=calls_used,
                 cluster_cache={},
                 request_id=request_id,
+                usage=resumed_usage,
             )
         except LQAIError as exc:
             error_code = exc.effective_code
@@ -2466,6 +2471,7 @@ async def resume_tool_call(
         last_applied_skills: list[str] | None = None
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
+        loop_cost_usd: float | None = None
 
         if loop_outcome is not None and isinstance(loop_outcome, LoopFinal):
             last_tier = loop_outcome.tier
@@ -2474,6 +2480,7 @@ async def resume_tool_call(
             last_applied_skills = list(loop_outcome.applied_skills or [])
             prompt_tokens = loop_outcome.usage_prompt or None
             completion_tokens = loop_outcome.usage_completion or None
+            loop_cost_usd = loop_outcome.usage.cost_usd if loop_outcome.usage else None
             accumulated = [loop_outcome.text]
             delta_frame: dict[str, Any] = {
                 "type": "delta",
@@ -2511,6 +2518,7 @@ async def resume_tool_call(
                             "calls_used": loop_outcome.calls_used,
                             "model": model,
                             "skill_names": resumed_skills,
+                            "usage": loop_outcome.usage.to_state(),
                         }
                     ),
                     status="pending",
@@ -2610,7 +2618,7 @@ async def resume_tool_call(
                 routed_inference_tier=last_tier,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
-                cost_estimate_usd=None,
+                cost_estimate_usd=loop_cost_usd,
                 applied_skills=last_applied_skills or [],
                 error_code=error_code,
             )
@@ -3276,7 +3284,9 @@ async def _non_streaming_response(
 
         if isinstance(outcome, LoopFinal):
             # Normal completion — persist exactly like the single-shot path.
+            # Tokens and cost are the totals over every round of the turn.
             applied_skills = list(outcome.applied_skills or [])
+            loop_cost_usd = outcome.usage.cost_usd if outcome.usage else None
             persisted = await _persist_assistant_message(
                 db,
                 directed_by_user_id=user.id,
@@ -3289,7 +3299,7 @@ async def _non_streaming_response(
                 routed_inference_tier=outcome.tier,
                 prompt_tokens=outcome.usage_prompt or None,
                 completion_tokens=outcome.usage_completion or None,
-                cost_estimate_usd=None,
+                cost_estimate_usd=loop_cost_usd,
                 applied_skills=applied_skills,
                 error_code=None,
             )
@@ -3365,7 +3375,7 @@ async def _non_streaming_response(
                 citations=[],
                 routed_inference_tier=outcome.tier,
                 routed_provider=outcome.provider,
-                cost_estimate=None,
+                cost_estimate=loop_cost_usd,
                 applied_skills=applied_skills,
                 applied_file_ids=list(request.lq_ai_file_ids),
                 attached_skill_names=list(attached_skill_names or []),
@@ -3406,6 +3416,7 @@ async def _non_streaming_response(
                         "calls_used": outcome.calls_used,
                         "model": request.model,
                         "skill_names": list(request.lq_ai_skills or []),
+                        "usage": outcome.usage.to_state(),
                     }
                 ),
                 status="pending",
@@ -3651,6 +3662,8 @@ async def _stream_response(
         last_applied_skills: list[str] | None = None
         prompt_tokens: int | None = None
         completion_tokens: int | None = None
+        # Set only on a tool-loop turn: the single-shot stream carries no cost.
+        loop_cost_usd: float | None = None
         loop_outcome: LoopFinal | LoopConfirmation | LoopMcpAuth | None = None
         error_code: str | None = None
         error_envelope: dict[str, Any] | None = None
@@ -3702,6 +3715,7 @@ async def _stream_response(
                 last_applied_skills = list(loop_outcome.applied_skills or [])
                 prompt_tokens = loop_outcome.usage_prompt or None
                 completion_tokens = loop_outcome.usage_completion or None
+                loop_cost_usd = loop_outcome.usage.cost_usd if loop_outcome.usage else None
                 accumulated = [loop_outcome.text]
                 delta_frame: dict[str, Any] = {
                     "type": "delta",
@@ -3741,6 +3755,7 @@ async def _stream_response(
                                 "calls_used": loop_outcome.calls_used,
                                 "model": request.model,
                                 "skill_names": list(request.lq_ai_skills or []),
+                                "usage": loop_outcome.usage.to_state(),
                             }
                         ),
                         status="pending",
@@ -3911,12 +3926,13 @@ async def _stream_response(
                 routed_inference_tier=last_tier,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
-                # Streaming chunks carry no cost surface today (the
-                # gateway populates it on the routing log; the chunk
-                # envelope has only token usage). Leave NULL on the
-                # message; the routing-log row carries the
-                # authoritative cost.
-                cost_estimate_usd=None,
+                # Single-shot stream: chunks carry no cost surface today
+                # (the gateway populates it on the routing log; the chunk
+                # envelope has only token usage), so the message keeps
+                # NULL and the routing-log row carries the cost. A
+                # tool-loop turn sends its rounds non-streaming and
+                # records the sum over its rounds.
+                cost_estimate_usd=loop_cost_usd,
                 applied_skills=last_applied_skills or [],
                 error_code=error_code,
             )

@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -55,6 +55,7 @@ from app.mcp.service import list_servers
 from app.models.user import User
 from app.research import service as research_service
 from app.research.registry import SOURCE_REGISTRY, resolve_available_sources
+from app.schemas.chats import micros_to_usd, usd_to_micros
 from app.schemas.gateway import ChatCompletionMessage, ChatCompletionRequest
 from app.tools.governance import (
     governed_tool_invocation,
@@ -70,10 +71,111 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class LoopUsage:
+    """Running token and cost totals over every model round of one turn.
+
+    A turn that runs the tool loop calls the model several times. Each
+    round's tokens and cost are added here, the final no-tools round
+    included, so the reply row records the whole turn and not only the
+    last round.
+
+    Cost is kept as integer USD micros (the unit of
+    ``messages.cost_estimate_micros``): each round's float is converted
+    once with :func:`~app.schemas.chats.usd_to_micros` and the integers
+    are summed, so no float sum can drift.
+
+    A round with no cost (the gateway has no rate for the routed model)
+    is counted in ``unpriced_rounds`` and adds nothing to
+    ``priced_cost_micros``. :attr:`cost_micros` is then ``None``: the
+    turn's cost is unknown, and a partial sum is not reported as if it
+    were the whole.
+
+    :meth:`to_state` and :meth:`from_state` carry the totals through a
+    paused turn's saved state, so a resumed turn continues the sum.
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    priced_cost_micros: int = 0
+    unpriced_rounds: int = 0
+    rounds: int = 0
+
+    def add_round(
+        self, prompt_tokens: int, completion_tokens: int, cost_micros: int | None
+    ) -> None:
+        """Add one model round's tokens and cost (``None`` = unpriced)."""
+        self.rounds += 1
+        self.prompt_tokens += prompt_tokens
+        self.completion_tokens += completion_tokens
+        if cost_micros is None:
+            self.unpriced_rounds += 1
+        else:
+            self.priced_cost_micros += cost_micros
+
+    @property
+    def cost_micros(self) -> int | None:
+        """The turn's cost in micros, or ``None`` if any round was unpriced."""
+        if self.unpriced_rounds:
+            return None
+        return self.priced_cost_micros
+
+    @property
+    def cost_usd(self) -> float | None:
+        """:attr:`cost_micros` as a USD float, for the reply-row writer.
+
+        The writer converts back with ``usd_to_micros``; that round trip
+        returns the same integer for any realistic cost.
+        """
+        return micros_to_usd(self.cost_micros)
+
+    def copy(self) -> LoopUsage:
+        return replace(self)
+
+    def to_state(self) -> dict[str, int]:
+        """JSON-safe form for a paused turn's ``resume_state``."""
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "priced_cost_micros": self.priced_cost_micros,
+            "unpriced_rounds": self.unpriced_rounds,
+            "rounds": self.rounds,
+        }
+
+    @classmethod
+    def from_state(cls, state: Any) -> LoopUsage:
+        """Rebuild from :meth:`to_state` output.
+
+        A turn paused before the totals were saved has no such entry; it
+        resumes with every total at zero. Each key is read with a default.
+        """
+        if not isinstance(state, dict):
+            return cls()
+
+        def _int(key: str) -> int:
+            value = state.get(key, 0)
+            if isinstance(value, bool) or not isinstance(value, int):
+                return 0
+            return value
+
+        return cls(
+            prompt_tokens=_int("prompt_tokens"),
+            completion_tokens=_int("completion_tokens"),
+            priced_cost_micros=_int("priced_cost_micros"),
+            unpriced_rounds=_int("unpriced_rounds"),
+            rounds=_int("rounds"),
+        )
+
+
+@dataclass
 class LoopFinal:
     """The model produced a final text answer; no more tool calls needed.
 
     Carries the full message list so the caller can persist the turn.
+
+    ``usage_prompt`` and ``usage_completion`` are the totals over every
+    round of the turn. ``usage`` holds those totals with the cost and the
+    round count; it is ``None`` only when a caller builds a
+    :class:`LoopFinal` by hand.
     """
 
     text: str
@@ -86,6 +188,7 @@ class LoopFinal:
     messages: list[dict[str, Any]] = field(default_factory=list)
     calls_used: int = 0
     tool_sources: list[ToolSourceRecord] = field(default_factory=list)
+    usage: LoopUsage | None = None
 
 
 @dataclass
@@ -107,6 +210,9 @@ class LoopConfirmation:
     args_summary: str  # the args_digest — counts/types only, never raw args
     messages: list[dict[str, Any]] = field(default_factory=list)
     calls_used: int = 0
+    # Totals so far, the round that proposed this call included. Saved
+    # with the paused turn so the resumed turn continues the sum.
+    usage: LoopUsage = field(default_factory=LoopUsage)
 
 
 @dataclass
@@ -122,6 +228,8 @@ class LoopMcpAuth:
     authorize_url: str | None = None  # populated by Task 6/7 if needed
     messages: list[dict[str, Any]] = field(default_factory=list)
     calls_used: int = 0
+    # Totals so far, the round that called the server included.
+    usage: LoopUsage = field(default_factory=LoopUsage)
 
 
 LoopOutcome = LoopFinal | LoopConfirmation | LoopMcpAuth
@@ -796,6 +904,7 @@ async def run_chat_tool_loop(
     calls_used: int = 0,
     cluster_cache: dict[Any, Any] | None = None,
     request_id: str | None = None,
+    usage: LoopUsage | None = None,
 ) -> LoopOutcome:
     """Run the agentic chat tool-loop until a terminal outcome is reached.
 
@@ -838,6 +947,10 @@ async def run_chat_tool_loop(
         cluster_cache: Request-scoped cache for research cluster/opinion data.
             ``None`` initialises to an empty dict.
         request_id: Correlation header value forwarded to gateway / services.
+        usage: Token and cost totals already spent on this turn (non-empty
+            when resuming a paused turn). ``None`` starts from zero. Every
+            round this call makes, the final no-tools round included, is
+            added to a copy; the outcome carries the totals.
 
     Returns:
         One of :class:`LoopFinal`, :class:`LoopConfirmation`, or
@@ -847,6 +960,9 @@ async def run_chat_tool_loop(
 
     if cluster_cache is None:
         cluster_cache = {}
+
+    # Turn totals: carried in on resume, added to on every round.
+    usage = usage.copy() if usage is not None else LoopUsage()
 
     # Build the server-auth map once per turn from list_servers.  Only
     # ``auth == "oauth"`` servers need per-user token resolution; for
@@ -873,8 +989,10 @@ async def run_chat_tool_loop(
         # destructive call that pushed us to the limit), fire the final round
         # immediately without tools.
         if calls_used >= settings.chat_tool_call_cap:
-            final_resp = await _final_synthesis_round(gateway, base_request, messages, request_id)
-            return _build_loop_final(final_resp, messages, calls_used, collected_sources)
+            final_resp = await _final_synthesis_round(
+                gateway, base_request, messages, request_id, usage
+            )
+            return _build_loop_final(final_resp, messages, calls_used, collected_sources, usage)
 
         # ── Build this round's request with tools ──────────────────────────
         round_request = _build_request(
@@ -883,7 +1001,7 @@ async def run_chat_tool_loop(
             tools=allowlist.function_schemas(),
             tool_choice="auto",
         )
-        resp = await gateway.chat_completion(round_request, request_id=request_id)
+        resp = await _call_round(gateway, round_request, request_id, usage)
 
         choice = resp.choices[0]
         finish_reason = choice.finish_reason
@@ -891,7 +1009,7 @@ async def run_chat_tool_loop(
 
         # ── Terminal: no tool calls ──────────────────────────────────────────
         if finish_reason != "tool_calls" or not msg.tool_calls:
-            return _build_loop_final(resp, messages, calls_used, collected_sources)
+            return _build_loop_final(resp, messages, calls_used, collected_sources, usage)
 
         # ── Process tool calls in this round ─────────────────────────────────
         # The assistant message (with its tool_calls) goes into the working
@@ -941,6 +1059,7 @@ async def run_chat_tool_loop(
                     # so Task 6/7 can resume correctly.
                     messages=messages,
                     calls_used=calls_used,
+                    usage=usage,
                 )
 
             # ── (b.4) Read-only — execute (counts as governed) ───────────
@@ -974,6 +1093,7 @@ async def run_chat_tool_loop(
                     authorize_url=None,
                     messages=messages,
                     calls_used=calls_used,
+                    usage=usage,
                 )
             except ToolTierRefused:
                 # ToolTierRefused still counts as governed: governed_tool_invocation
@@ -1007,13 +1127,17 @@ async def run_chat_tool_loop(
         # forever.  Break out immediately to the final no-tools round so the
         # model synthesises from whatever it has gathered so far.
         if governed_count == 0:
-            final_resp = await _final_synthesis_round(gateway, base_request, messages, request_id)
-            return _build_loop_final(final_resp, messages, calls_used, collected_sources)
+            final_resp = await _final_synthesis_round(
+                gateway, base_request, messages, request_id, usage
+            )
+            return _build_loop_final(final_resp, messages, calls_used, collected_sources, usage)
 
         # ── Cap check AFTER incrementing ─────────────────────────────────
         if calls_used >= settings.chat_tool_call_cap:
-            final_resp = await _final_synthesis_round(gateway, base_request, messages, request_id)
-            return _build_loop_final(final_resp, messages, calls_used, collected_sources)
+            final_resp = await _final_synthesis_round(
+                gateway, base_request, messages, request_id, usage
+            )
+            return _build_loop_final(final_resp, messages, calls_used, collected_sources, usage)
 
 
 # ---------------------------------------------------------------------------
@@ -1030,11 +1154,47 @@ _SYNTHESIS_DIRECTIVE = (
 )
 
 
+def _round_usage(resp: Any) -> tuple[int, int, int | None]:
+    """Read one round's prompt tokens, completion tokens and cost (micros).
+
+    The only place a round's tokens and cost are read. Rounds are sent
+    non-streaming, so both come from the response body: ``usage`` and
+    the gateway's ``cost_estimate`` (a USD float, ``None`` when no rate
+    is configured for the routed model). The cost is converted to micros
+    here, once per round, with the same helper the reply row uses.
+    """
+    usage = getattr(resp, "usage", None)
+    prompt = getattr(usage, "prompt_tokens", 0) if usage is not None else 0
+    completion = getattr(usage, "completion_tokens", 0) if usage is not None else 0
+    cost = getattr(resp, "cost_estimate", None)
+    cost_micros: int | None = None
+    if isinstance(cost, int | float) and not isinstance(cost, bool):
+        cost_micros = usd_to_micros(float(cost))
+    return (
+        prompt if isinstance(prompt, int) else 0,
+        completion if isinstance(completion, int) else 0,
+        cost_micros,
+    )
+
+
+async def _call_round(
+    gateway: Any,
+    request: ChatCompletionRequest,
+    request_id: str | None,
+    usage: LoopUsage,
+) -> Any:
+    """Send one model round and add its tokens and cost to ``usage``."""
+    resp = await gateway.chat_completion(request, request_id=request_id)
+    usage.add_round(*_round_usage(resp))
+    return resp
+
+
 async def _final_synthesis_round(
     gateway: Any,
     base_request: ChatCompletionRequest,
     messages: list[dict[str, Any]],
     request_id: str | None,
+    usage: LoopUsage,
 ) -> Any:
     """Issue the final no-tools round with an explicit synthesis directive.
 
@@ -1049,9 +1209,11 @@ async def _final_synthesis_round(
     model for this round only and never leaks into the persisted turn history.
     """
     synth_messages = [*messages, {"role": "user", "content": _SYNTHESIS_DIRECTIVE}]
-    return await gateway.chat_completion(
+    return await _call_round(
+        gateway,
         _build_request(base_request, synth_messages, tools=None, tool_choice="none"),
-        request_id=request_id,
+        request_id,
+        usage,
     )
 
 
@@ -1087,14 +1249,22 @@ def _build_loop_final(
     messages: list[dict[str, Any]],
     calls_used: int,
     tool_sources: list[ToolSourceRecord] | None = None,
+    usage: LoopUsage | None = None,
 ) -> LoopFinal:
-    """Build a :class:`LoopFinal` from a gateway response."""
+    """Build a :class:`LoopFinal` from the last round's response.
+
+    Text, tier, provider and model come from the last round. Tokens and
+    cost are the turn's totals in ``usage``, which already includes the
+    last round.
+    """
     choice = resp.choices[0]
-    usage = resp.usage
+    if usage is None:
+        usage = LoopUsage()
+        usage.add_round(*_round_usage(resp))
     return LoopFinal(
         text=choice.message.content or "",
-        usage_prompt=usage.prompt_tokens if usage else 0,
-        usage_completion=usage.completion_tokens if usage else 0,
+        usage_prompt=usage.prompt_tokens,
+        usage_completion=usage.completion_tokens,
         tier=resp.routed_inference_tier,
         provider=resp.routed_provider,
         model=resp.model,
@@ -1102,4 +1272,5 @@ def _build_loop_final(
         messages=messages,
         calls_used=calls_used,
         tool_sources=tool_sources or [],
+        usage=usage,
     )

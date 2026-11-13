@@ -9443,14 +9443,26 @@ components:
           type: string
           nullable: true
           description: "Native provider model name (assistant only)."
-        prompt_tokens: {type: integer, nullable: true}
-        completion_tokens: {type: integer, nullable: true}
+        prompt_tokens:
+          type: integer
+          nullable: true
+          description: |
+            On a tool-loop turn, the sum over every model round of the
+            turn (paused and resumed rounds included).
+        completion_tokens:
+          type: integer
+          nullable: true
+          description: |
+            On a tool-loop turn, the sum over every model round of the
+            turn (paused and resumed rounds included).
         cost_estimate:
           type: number
           nullable: true
           description: |
             USD cost estimate. The DB stores integer USD micros
             (1e-6 USD); the wire field is the floating-point USD value.
+            On a tool-loop turn, the sum over every model round; NULL
+            when any round ran on a model with no configured price.
         error_code:
           type: string
           nullable: true
