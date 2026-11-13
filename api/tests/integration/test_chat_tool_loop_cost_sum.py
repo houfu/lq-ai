@@ -11,9 +11,15 @@ cost, and read the stored reply row:
 * a turn that pauses for a tool confirmation after one round and is resumed
   for two more: the reply row covers all three rounds;
 * a turn paused before the totals were saved (old ``resume_state`` shape):
-  it resumes, and its totals start from zero;
+  it resumes, its tokens are counted from the resume, and its cost is
+  stored as unknown (NULL);
 * a round with no cost (an unpriced route): tokens are summed, the stored
-  cost is NULL (unknown), not a partial sum.
+  cost is NULL (unknown), not a partial sum;
+* failure paths: a loop that raises an ``LQAIError`` on the streamed send or
+  on resume writes an error row with no totals; on the non-streaming send it
+  writes no row; an MCP-authorization stop writes no row;
+* one turn where the API's gateway client parses ``cost_estimate`` from the
+  gateway's JSON reply (respx), rather than from a stubbed object.
 
 Worked example used throughout (``_R1`` .. ``_R3``):
 
@@ -36,8 +42,10 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import pytest_asyncio
+import respx
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +54,7 @@ from app.autonomous.guard import ToolResult
 from app.chat.tool_schemas import ChatToolAllowlist, ToolSpec
 from app.clients.gateway import GatewayClient, set_gateway_client
 from app.db.session import get_db
+from app.errors import LQAIError, MCPAuthorizationRequired, ProviderUnavailable
 from app.main import app
 from app.models.chat import Message
 from app.models.chat_pending_tool_call import ChatPendingToolCall
@@ -222,12 +231,18 @@ def _allowlist() -> ChatToolAllowlist:
 
 @contextlib.contextmanager
 def _stub_turn(
-    responses: list[ChatCompletionResponse], *, cap: int | None = None
+    responses: list[ChatCompletionResponse | LQAIError],
+    *,
+    cap: int | None = None,
+    real_gateway_client: bool = False,
 ) -> Iterator[list[ChatCompletionRequest]]:
     """Run the real loop against ``responses``, one per model round.
 
-    Yields the list of requests the loop sent, in order. Tools are stubbed:
-    a read-only call returns an empty result; a gated call pauses.
+    An ``LQAIError`` in ``responses`` is raised for that round. Yields the
+    list of requests the loop sent, in order. Tools are stubbed: a
+    read-only call returns an empty result; a gated call pauses. With
+    ``real_gateway_client`` the client's ``chat_completion`` is left as is
+    (the test mocks the gateway's HTTP reply instead).
     """
     sent: list[ChatCompletionRequest] = []
     queue = list(responses)
@@ -237,11 +252,17 @@ def _stub_turn(
     ) -> ChatCompletionResponse:
         sent.append(request)
         assert queue, "the loop asked for more rounds than the test stubbed"
-        return queue.pop(0)
+        item = queue.pop(0)
+        if isinstance(item, LQAIError):
+            raise item
+        return item
 
     stack = contextlib.ExitStack()
     with stack:
-        stack.enter_context(patch.object(GatewayClient, "chat_completion", new=_chat_completion))
+        if not real_gateway_client:
+            stack.enter_context(
+                patch.object(GatewayClient, "chat_completion", new=_chat_completion)
+            )
         stack.enter_context(
             patch.object(
                 GatewayClient,
@@ -293,8 +314,8 @@ async def _send(client: AsyncClient, user: User, chat_id: str, *, stream: bool) 
     return resp
 
 
-async def _assistant_row(db: AsyncSession, chat_id: str) -> Message:
-    rows = (
+async def _assistant_rows(db: AsyncSession, chat_id: str) -> list[Message]:
+    return list(
         (
             await db.execute(
                 select(Message).where(
@@ -305,6 +326,10 @@ async def _assistant_row(db: AsyncSession, chat_id: str) -> Message:
         .scalars()
         .all()
     )
+
+
+async def _assistant_row(db: AsyncSession, chat_id: str) -> Message:
+    rows = await _assistant_rows(db, chat_id)
     assert len(rows) == 1, f"expected one assistant row, got {len(rows)}"
     await db.refresh(rows[0])
     return rows[0]
@@ -531,19 +556,24 @@ async def test_second_pause_carries_the_running_totals(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_turn_paused_in_old_state_shape_resumes_from_zero(
-    client: AsyncClient, db_user: User, db_session: AsyncSession
-) -> None:
-    """A pending row saved before the totals existed has no ``usage`` key.
-
-    It resumes normally; the reply row's totals cover only the rounds run
-    after the resume (the earlier rounds were never recorded).
-    """
-    chat_id_str = await _new_chat(client, db_user)
+async def _seed_pending(
+    db_session: AsyncSession,
+    user: User,
+    chat_id_str: str,
+    *,
+    usage: dict[str, int] | None,
+) -> ChatPendingToolCall:
+    """Write a pending row by hand. ``usage=None`` is the pre-change shape."""
     chat_id = uuid.UUID(chat_id_str)
     assistant_message_id = uuid.uuid4()
+    state: dict[str, Any] = {
+        "messages": [{"role": "user", "content": "delete it"}],
+        "calls_used": 0,
+        "model": "smart",
+        "skill_names": [],
+    }
+    if usage is not None:
+        state["usage"] = usage
     tcl = ToolCallLog(
         origin="chat",
         provider="files",
@@ -554,7 +584,7 @@ async def test_turn_paused_in_old_state_shape_resumes_from_zero(
         outcome="pending",
         cost_usd=None,
         args_digest="deadbeef" * 8,
-        user_id=db_user.id,
+        user_id=user.id,
         chat_id=chat_id,
         message_id=assistant_message_id,
     )
@@ -562,7 +592,7 @@ async def test_turn_paused_in_old_state_shape_resumes_from_zero(
     await db_session.flush()
     pending = ChatPendingToolCall(
         chat_id=chat_id,
-        user_id=db_user.id,
+        user_id=user.id,
         assistant_message_id=assistant_message_id,
         function_name=DELETE_FN,
         kind="mcp",
@@ -571,21 +601,30 @@ async def test_turn_paused_in_old_state_shape_resumes_from_zero(
         destructive=True,
         tier=2,
         tool_call_args=encrypt_payload_envelope({"q": "x"}),
-        # The shape saved before this change: no "usage" key.
-        resume_state=encrypt_payload_envelope(
-            {
-                "messages": [{"role": "user", "content": "delete it"}],
-                "calls_used": 0,
-                "model": "smart",
-                "skill_names": [],
-            }
-        ),
+        resume_state=encrypt_payload_envelope(state),
         status="pending",
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
         tool_call_log_id=tcl.id,
     )
     db_session.add(pending)
     await db_session.commit()
+    return pending
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_turn_paused_in_old_state_shape_stores_cost_unknown_tokens_from_resume(
+    client: AsyncClient, db_user: User, db_session: AsyncSession
+) -> None:
+    """A pending row saved before the totals existed has no ``usage`` key.
+
+    The rounds before the pause were never recorded, so neither total can
+    cover the whole turn. Tokens are counted from the resume (a partial
+    count, stated in HONEST-STATE). The cost is stored as unknown (NULL),
+    because a sum of only the resumed rounds would read as the turn's cost.
+    """
+    chat_id_str = await _new_chat(client, db_user)
+    pending = await _seed_pending(db_session, db_user, chat_id_str, usage=None)
 
     with _stub_turn([_response(_R2, tool_call=SEARCH_FN), _response(_R3, text="Not deleted.")]):
         resp = await client.post(
@@ -596,9 +635,166 @@ async def test_turn_paused_in_old_state_shape_resumes_from_zero(
     assert resp.status_code == 200, resp.text
 
     row = await _assistant_row(db_session, chat_id_str)
-    _assert_totals(row, _R2, _R3)
+    assert row.error_code is None
+    # Tokens from the resume onward (R2 + R3); cost unknown, not 60 800.
     assert (row.prompt_tokens, row.completion_tokens, row.cost_estimate_micros) == (
         440,
         445,
-        60_800,
+        None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Failure paths: what is and is not recorded
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_loop_error_on_streamed_send_writes_error_row_without_totals(
+    client: AsyncClient, db_user: User, db_session: AsyncSession
+) -> None:
+    """Round 2 raises an ``LQAIError``: the row has the error code and no totals."""
+    chat_id = await _new_chat(client, db_user)
+    with _stub_turn([_response(_R1, tool_call=SEARCH_FN), ProviderUnavailable("down")]):
+        await _send(client, db_user, chat_id, stream=True)
+
+    row = await _assistant_row(db_session, chat_id)
+    assert row.error_code is not None
+    assert (row.prompt_tokens, row.completion_tokens, row.cost_estimate_micros) == (
+        None,
+        None,
+        None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_loop_error_on_non_streaming_send_writes_no_row(
+    client: AsyncClient, db_user: User, db_session: AsyncSession
+) -> None:
+    chat_id = await _new_chat(client, db_user)
+    with _stub_turn([_response(_R1, tool_call=SEARCH_FN), ProviderUnavailable("down")]):
+        resp = await client.post(
+            f"/api/v1/chats/{chat_id}/messages",
+            headers=_h(db_user),
+            json={"content": "research this", "stream": False},
+        )
+    assert resp.status_code >= 400
+    assert await _assistant_rows(db_session, chat_id) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_loop_error_on_resume_writes_error_row_without_totals(
+    client: AsyncClient, db_user: User, db_session: AsyncSession
+) -> None:
+    """Saved totals from before the pause are lost when the resumed loop raises."""
+    chat_id = await _new_chat(client, db_user)
+    pending = await _seed_pending(
+        db_session,
+        db_user,
+        chat_id,
+        usage={
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "priced_cost_micros": 12_300,
+            "unpriced_rounds": 0,
+            "rounds": 1,
+        },
+    )
+    with _stub_turn([ProviderUnavailable("down")]):
+        resp = await client.post(
+            f"/api/v1/chats/{chat_id}/tool-calls/{pending.id}",
+            headers=_h(db_user),
+            json={"decision": "deny"},
+        )
+    assert resp.status_code == 200, resp.text
+
+    row = await _assistant_row(db_session, chat_id)
+    assert row.error_code is not None
+    assert (row.prompt_tokens, row.completion_tokens, row.cost_estimate_micros) == (
+        None,
+        None,
+        None,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+async def test_mcp_authorization_stop_writes_no_row(
+    client: AsyncClient, db_user: User, db_session: AsyncSession, stream: bool
+) -> None:
+    chat_id = await _new_chat(client, db_user)
+    with (
+        _stub_turn([_response(_R1, tool_call=SEARCH_FN)]),
+        patch(
+            "app.chat.tool_loop.execute_tool",
+            new=AsyncMock(side_effect=MCPAuthorizationRequired("cl-prod")),
+        ),
+    ):
+        await _send(client, db_user, chat_id, stream=stream)
+    assert await _assistant_rows(db_session, chat_id) == []
+
+
+# ---------------------------------------------------------------------------
+# The API's gateway client parses cost_estimate from the gateway's JSON
+# ---------------------------------------------------------------------------
+
+
+def _raw_round(prompt: int, completion: int, cost: float, *, tool: str | None) -> dict[str, Any]:
+    """A gateway response body as JSON, not a parsed model object."""
+    message: dict[str, Any] = {"role": "assistant", "content": "Answer."}
+    finish = "stop"
+    if tool is not None:
+        message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": tool, "arguments": "{}"}}
+            ],
+        }
+        finish = "tool_calls"
+    return {
+        "id": "chatcmpl-raw",
+        "object": "chat.completion",
+        "created": 1_700_000_000,
+        "model": "claude-sonnet-4-6",
+        "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+        "usage": {
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+        },
+        "routed_inference_tier": 3,
+        "routed_provider": "anthropic-prod",
+        "routed_model": "claude-sonnet-4-6",
+        "cost_estimate": cost,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+@respx.mock
+async def test_cost_is_parsed_from_gateway_json_by_the_real_client(
+    client: AsyncClient, db_user: User, db_session: AsyncSession
+) -> None:
+    """``GatewayClient.chat_completion`` is not stubbed; the gateway's HTTP reply is."""
+    route = respx.post(f"{GATEWAY_BASE}/v1/chat/completions").mock(
+        side_effect=[
+            httpx.Response(200, json=_raw_round(100, 20, 0.0123, tool=SEARCH_FN)),
+            httpx.Response(200, json=_raw_round(180, 35, 0.0217, tool=None)),
+        ]
+    )
+    chat_id = await _new_chat(client, db_user)
+    with _stub_turn([], real_gateway_client=True):
+        await _send(client, db_user, chat_id, stream=False)
+
+    assert route.call_count == 2
+    row = await _assistant_row(db_session, chat_id)
+    assert (row.prompt_tokens, row.completion_tokens, row.cost_estimate_micros) == (
+        280,
+        55,
+        34_000,
     )

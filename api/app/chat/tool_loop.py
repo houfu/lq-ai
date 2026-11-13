@@ -145,17 +145,23 @@ class LoopUsage:
     def from_state(cls, state: Any) -> LoopUsage:
         """Rebuild from :meth:`to_state` output.
 
-        A turn paused before the totals were saved has no such entry; it
-        resumes with every total at zero. Each key is read with a default.
+        A turn paused before the totals were saved has no such entry. Its
+        rounds before the pause were never recorded, so the totals cannot
+        cover the whole turn: tokens start from zero (a partial count), and
+        the cost is marked unknown by counting one unpriced round, so a
+        partial cost is never stored as if it were the whole.
+
+        Each key is read with a default of 0; a value that is not a
+        non-negative integer reads as 0.
         """
         if not isinstance(state, dict):
-            return cls()
+            return cls(unpriced_rounds=1)
 
         def _int(key: str) -> int:
             value = state.get(key, 0)
             if isinstance(value, bool) or not isinstance(value, int):
                 return 0
-            return value
+            return max(value, 0)
 
         return cls(
             prompt_tokens=_int("prompt_tokens"),

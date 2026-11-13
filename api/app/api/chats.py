@@ -2255,8 +2255,8 @@ async def resume_tool_call(
     calls_used: int = int(resume_state.get("calls_used", 0))
     model: str = str(resume_state.get("model", "smart"))
     resumed_skills: list[str] = list(resume_state.get("skill_names", []))
-    # Token and cost totals of the rounds before the pause; a turn paused
-    # before these were saved resumes from zero.
+    # Token and cost totals of the rounds before the pause. A turn paused
+    # before these were saved resumes with tokens from zero and cost unknown.
     resumed_usage = LoopUsage.from_state(resume_state.get("usage"))
 
     request_id = (

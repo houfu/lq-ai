@@ -9447,22 +9447,27 @@ components:
           type: integer
           nullable: true
           description: |
-            On a tool-loop turn, the sum over every model round of the
-            turn (paused and resumed rounds included).
+            On a tool-loop turn, the sum over every chat-completion round
+            of the tool loop (paused and resumed rounds included).
+            Embedding and citation-judge calls are not included.
         completion_tokens:
           type: integer
           nullable: true
           description: |
-            On a tool-loop turn, the sum over every model round of the
-            turn (paused and resumed rounds included).
+            On a tool-loop turn, the sum over every chat-completion round
+            of the tool loop (paused and resumed rounds included).
+            Embedding and citation-judge calls are not included.
         cost_estimate:
           type: number
           nullable: true
           description: |
             USD cost estimate. The DB stores integer USD micros
             (1e-6 USD); the wire field is the floating-point USD value.
-            On a tool-loop turn, the sum over every model round; NULL
-            when any round ran on a model with no configured price.
+            On a tool-loop turn, the sum over every chat-completion round
+            of the tool loop; NULL when any round ran on a model with no
+            configured price, or when the turn resumed from a pause saved
+            without totals. Embedding and citation-judge calls are not
+            included.
         error_code:
           type: string
           nullable: true
@@ -9574,7 +9579,11 @@ components:
         cost_estimate:
           type: number
           nullable: true
-          description: "USD cost estimate (gateway-side, when rate is configured)"
+          description: |
+            USD cost estimate (gateway-side, when rate is configured). On a
+            tool-loop turn, the same value as `message.cost_estimate`: the
+            sum over every chat-completion round of the tool loop, or NULL
+            when any round was unpriced.
         applied_skills:
           type: array
           items: {type: string}

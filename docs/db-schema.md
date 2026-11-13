@@ -471,9 +471,11 @@ CREATE TABLE messages (
                                              OR (routed_inference_tier BETWEEN 1 AND 5)),
     routed_provider          TEXT,
     routed_model             TEXT,
-    -- On a tool-loop turn, tokens and cost are summed over every model
-    -- round of the turn, a paused turn's rounds included. Cost is NULL
-    -- when any round had no configured price.
+    -- On a tool-loop turn, tokens and cost are summed over every
+    -- chat-completion round of the tool loop, a paused turn's rounds
+    -- included. Embedding and citation-judge calls are not included
+    -- (they are in the gateway's routing log). Cost is NULL when any
+    -- round had no configured price.
     prompt_tokens            INTEGER CHECK (prompt_tokens IS NULL OR prompt_tokens >= 0),
     completion_tokens        INTEGER CHECK (completion_tokens IS NULL OR completion_tokens >= 0),
     -- Cost stored as integer USD micros (1 micro = 1e-6 USD) to avoid

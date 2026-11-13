@@ -111,9 +111,34 @@ def test_state_round_trip() -> None:
 
 @pytest.mark.parametrize(
     "state",
-    [None, {}, "garbage", {"prompt_tokens": "7", "rounds": True, "priced_cost_micros": 1.5}],
+    [{}, {"prompt_tokens": "7", "rounds": True, "priced_cost_micros": 1.5}],
 )
 def test_from_state_defaults_every_missing_or_bad_key_to_zero(state: Any) -> None:
+    assert LoopUsage.from_state(state) == LoopUsage()
+
+
+@pytest.mark.parametrize("state", [None, "garbage"])
+def test_old_state_shape_marks_cost_unknown_and_tokens_from_zero(state: Any) -> None:
+    """No saved totals: the rounds before the pause were never recorded.
+
+    Tokens start from zero (partial); the cost must read as unknown, not as
+    a sum that covers only the rounds after the resume.
+    """
+    usage = LoopUsage.from_state(state)
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.rounds) == (0, 0, 0)
+    assert usage.cost_micros is None
+    usage.add_round(180, 35, 21_700)
+    assert usage.cost_micros is None
+
+
+def test_negative_saved_values_are_clamped_to_zero() -> None:
+    state = {
+        "prompt_tokens": -500,
+        "completion_tokens": -1,
+        "priced_cost_micros": -9,
+        "unpriced_rounds": -1,
+        "rounds": -3,
+    }
     assert LoopUsage.from_state(state) == LoopUsage()
 
 
@@ -211,3 +236,115 @@ async def test_confirmation_outcome_includes_the_proposing_round() -> None:
         "unpriced_rounds": 0,
         "rounds": 1,
     }
+
+
+def _search_allowlist() -> ChatToolAllowlist:
+    return ChatToolAllowlist(
+        specs={
+            "search_case_law": ToolSpec(
+                function_name="search_case_law",
+                kind="research",
+                provider="cl-prod",
+                tool="search_case_law",
+                read_only=True,
+                destructive=False,
+                requires_confirmation=False,
+                parameters={},
+                description="search",
+            )
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_hallucinated_round_and_its_synthesis_round_are_both_counted() -> None:
+    gateway = AsyncMock()
+    gateway.chat_completion.side_effect = [
+        _resp(100, 20, 0.0123, tool="no_such_tool"),
+        _resp(260, 410, 0.0391),
+    ]
+    with patch("app.chat.tool_loop.list_servers", new=AsyncMock(return_value=[])):
+        outcome = await run_chat_tool_loop(
+            MagicMock(),
+            user=MagicMock(),
+            gateway=gateway,
+            base_request=_req(),
+            allowlist=_search_allowlist(),
+            assistant_message_id=uuid.uuid4(),
+        )
+    assert isinstance(outcome, LoopFinal)
+    assert outcome.usage is not None
+    assert gateway.chat_completion.call_args_list[1].args[0].tool_choice == "none"
+    assert (outcome.usage_prompt, outcome.usage_completion, outcome.usage.cost_micros) == (
+        360,
+        430,
+        51_400,
+    )
+    assert outcome.usage.rounds == 2
+
+
+@pytest.mark.asyncio
+async def test_tier_refused_round_is_counted() -> None:
+    from app.errors import ToolTierRefused
+
+    gateway = AsyncMock()
+    gateway.chat_completion.side_effect = [
+        _resp(100, 20, 0.0123, tool="search_case_law"),
+        _resp(180, 35, 0.0217),
+    ]
+    refused = ToolTierRefused(provider="cl-prod", tool="search_case_law", tier=5, ceiling=2)
+    with (
+        patch("app.chat.tool_loop.list_servers", new=AsyncMock(return_value=[])),
+        patch("app.chat.tool_loop.execute_tool", new=AsyncMock(side_effect=refused)),
+    ):
+        outcome = await run_chat_tool_loop(
+            MagicMock(),
+            user=MagicMock(),
+            gateway=gateway,
+            base_request=_req(),
+            allowlist=_search_allowlist(),
+            assistant_message_id=uuid.uuid4(),
+        )
+    assert isinstance(outcome, LoopFinal)
+    assert outcome.usage is not None
+    assert (outcome.usage_prompt, outcome.usage_completion, outcome.usage.cost_micros) == (
+        280,
+        55,
+        34_000,
+    )
+    assert outcome.usage.rounds == 2
+
+
+@pytest.mark.asyncio
+async def test_resume_at_cap_counts_the_immediate_synthesis_round() -> None:
+    carried = LoopUsage(
+        prompt_tokens=100, completion_tokens=20, priced_cost_micros=12_300, rounds=1
+    )
+    gateway = AsyncMock()
+    gateway.chat_completion.return_value = _resp(260, 410, 0.0391)
+    settings_obj = MagicMock()
+    settings_obj.chat_tool_call_cap = 2
+    with (
+        patch("app.chat.tool_loop.list_servers", new=AsyncMock(return_value=[])),
+        patch("app.chat.tool_loop.get_settings", return_value=settings_obj),
+    ):
+        outcome = await run_chat_tool_loop(
+            MagicMock(),
+            user=MagicMock(),
+            gateway=gateway,
+            base_request=_req(),
+            allowlist=_search_allowlist(),
+            assistant_message_id=uuid.uuid4(),
+            calls_used=2,
+            usage=carried,
+        )
+    assert isinstance(outcome, LoopFinal)
+    assert outcome.usage is not None
+    gateway.chat_completion.assert_called_once()
+    assert gateway.chat_completion.call_args.args[0].tool_choice == "none"
+    assert (outcome.usage_prompt, outcome.usage_completion, outcome.usage.cost_micros) == (
+        360,
+        430,
+        51_400,
+    )
+    assert outcome.usage.rounds == 2
