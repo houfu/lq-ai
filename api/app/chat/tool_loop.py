@@ -950,11 +950,14 @@ class ChatToolLoop:
     calling it when it wants no further round. Each call sends exactly one
     request to the gateway (the final no-tools round is a round of its
     own) and returns a :class:`LoopRound`. The round whose ``outcome`` is
-    set is the last; calling again after it raises.
+    set is the last; calling again after it, or after a round that raised,
+    raises :class:`~app.errors.InternalError`.
 
-    The next round is built from :attr:`base_request`, :attr:`allowlist`
-    and :attr:`messages` as they are when it starts. The constructor's
-    arguments are those of :func:`run_chat_tool_loop`.
+    The next round is built from :attr:`base_request` and :attr:`messages`
+    as they are when it starts; a caller may rebind :attr:`base_request`
+    between rounds. :attr:`allowlist`, :attr:`calls_used`, :attr:`outcome`
+    and :attr:`done` are read-only. The constructor's arguments are those
+    of :func:`run_chat_tool_loop`.
     """
 
     def __init__(
@@ -980,9 +983,14 @@ class ChatToolLoop:
         self._chat_id = chat_id
         self._cluster_cache: dict[Any, Any] = {} if cluster_cache is None else cluster_cache
         self._request_id = request_id
+        # Rebindable between rounds: the next round is built from it.
         self.base_request = base_request
-        self.allowlist = allowlist
-        self.calls_used = calls_used
+        # Fixed for the turn (read-only property). The connector sign-in map
+        # (``_server_auth_map``) is built once from it, at the first round.
+        # A slice that lets a loaded skill add tools must rebuild that map
+        # when it extends the allowlist.
+        self._allowlist = allowlist
+        self._calls_used = calls_used
         # Turn totals: carried in on resume, added to on every round.
         self.usage = usage.copy() if usage is not None else LoopUsage()
         # Working message list — grows as tool results are appended.
@@ -996,17 +1004,51 @@ class ChatToolLoop:
         # Set by a round in which every call had an unknown name.
         self._synthesis_due = False
         self._rounds = 0
-        self.outcome: LoopOutcome | None = None
+        self._outcome: LoopOutcome | None = None
+        # Set when a round raised: the round's partial work (tools already
+        # run, their audit rows written) is not in the loop's state, so the
+        # round must not be sent again.
+        self._failed = False
+
+    @property
+    def allowlist(self) -> ChatToolAllowlist:
+        """The turn's tool allowlist. Fixed for the turn; see ``__init__``."""
+        return self._allowlist
+
+    @property
+    def calls_used(self) -> int:
+        """Governed tool calls used this turn, as the cap reads it."""
+        return self._calls_used
+
+    @property
+    def outcome(self) -> LoopOutcome | None:
+        """The outcome, once a round has returned one."""
+        return self._outcome
 
     @property
     def done(self) -> bool:
         """``True`` once a round has returned an outcome."""
-        return self.outcome is not None
+        return self._outcome is not None
 
     async def next_round(self) -> LoopRound:
-        """Run one model round and return what it did."""
-        if self.outcome is not None:
+        """Run one model round and return what it did.
+
+        Raises :class:`~app.errors.InternalError` if the loop has ended or
+        an earlier round raised. An exception from the round itself
+        (cancellation included) is re-raised unchanged, and the loop is
+        then failed.
+        """
+        if self._outcome is not None:
             raise InternalError("chat tool loop: next_round called after the loop ended")
+        if self._failed:
+            raise InternalError("chat tool loop: next_round called after a round failed")
+        try:
+            return await self._next_round()
+        except BaseException:
+            self._failed = True
+            raise
+
+    async def _next_round(self) -> LoopRound:
         server_auth_map = self._server_auth_map
         if server_auth_map is None:
             # Build the server-auth map once per turn from list_servers.  Only
@@ -1014,7 +1056,7 @@ class ChatToolLoop:
             # ``none``/``bearer`` we pass user_token=None to the gateway.
             raw_servers = (
                 await list_servers(request_id=self._request_id)
-                if any(spec.kind == "mcp" for spec in self.allowlist.specs.values())
+                if any(spec.kind == "mcp" for spec in self._allowlist.specs.values())
                 else []
             )
             server_auth_map = {s["name"]: s.get("auth", "none") for s in raw_servers}
@@ -1026,13 +1068,13 @@ class ChatToolLoop:
         # resuming from a confirmed call that pushed us to the limit), or the
         # previous round's calls were all unknown names, the round is sent
         # without tools.
-        if self._synthesis_due or self.calls_used >= self._settings.chat_tool_call_cap:
+        if self._synthesis_due or self._calls_used >= self._settings.chat_tool_call_cap:
             final_resp = await _final_synthesis_round(
                 self._gateway, self.base_request, self.messages, self._request_id, self.usage
             )
             return self._end_round(
                 _build_loop_final(
-                    final_resp, self.messages, self.calls_used, self.tool_sources, self.usage
+                    final_resp, self.messages, self._calls_used, self.tool_sources, self.usage
                 ),
                 tools_offered=False,
                 tool_names=(),
@@ -1048,13 +1090,13 @@ class ChatToolLoop:
         tool_names: tuple[str, ...],
         governed_calls: int,
     ) -> LoopRound:
-        self.outcome = outcome
+        self._outcome = outcome
         return LoopRound(
             number=self._rounds,
             tools_offered=tools_offered,
             tool_names=tool_names,
             governed_calls=governed_calls,
-            calls_used=self.calls_used,
+            calls_used=self._calls_used,
             usage=self.usage.copy(),
             outcome=outcome,
         )
@@ -1068,7 +1110,7 @@ class ChatToolLoop:
         round_request = _build_request(
             self.base_request,
             messages,
-            tools=self.allowlist.function_schemas(),
+            tools=self._allowlist.function_schemas(),
             tool_choice="auto",
         )
         resp = await _call_round(self._gateway, round_request, request_id, usage)
@@ -1080,7 +1122,7 @@ class ChatToolLoop:
         # ── Terminal: no tool calls ──────────────────────────────────────────
         if finish_reason != "tool_calls" or not msg.tool_calls:
             return self._end_round(
-                _build_loop_final(resp, messages, self.calls_used, self.tool_sources, usage),
+                _build_loop_final(resp, messages, self._calls_used, self.tool_sources, usage),
                 tools_offered=True,
                 tool_names=(),
                 governed_calls=0,
@@ -1112,7 +1154,7 @@ class ChatToolLoop:
                 tc_args = {}
 
             # ── (b.2) Hallucinated tool name — policy refusal ──────────────
-            spec = self.allowlist.resolve(fn_name)
+            spec = self._allowlist.resolve(fn_name)
             if spec is None:
                 log.warning(
                     "chat_tool_loop: hallucinated tool %r — appending policy refusal",
@@ -1136,7 +1178,7 @@ class ChatToolLoop:
                         # Carry current messages (BEFORE appending assistant msg)
                         # so Task 6/7 can resume correctly.
                         messages=messages,
-                        calls_used=self.calls_used,
+                        calls_used=self._calls_used,
                         usage=usage,
                     ),
                     tools_offered=True,
@@ -1175,7 +1217,7 @@ class ChatToolLoop:
                         server=spec.provider,
                         authorize_url=None,
                         messages=messages,
-                        calls_used=self.calls_used,
+                        calls_used=self._calls_used,
                         usage=usage,
                     ),
                     tools_offered=True,
@@ -1206,7 +1248,7 @@ class ChatToolLoop:
         # Increment by governed calls only (executed + tier-refused).
         # Hallucinated calls (unknown function names) are excluded: they never
         # reached governance so they must not consume the per-turn cap budget.
-        self.calls_used += governed_count
+        self._calls_used += governed_count
 
         # ── Termination guard: all-hallucination round ────────────────────
         # If every proposed call this round was hallucinated (governed_count
