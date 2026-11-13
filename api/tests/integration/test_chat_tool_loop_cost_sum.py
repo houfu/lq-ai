@@ -312,14 +312,16 @@ async def _assistant_row(db: AsyncSession, chat_id: str) -> Message:
 
 def _assert_totals(row: Message, *rounds: _Round) -> None:
     assert row.error_code is None
-    assert row.prompt_tokens == sum(r.prompt for r in rounds)
-    assert row.completion_tokens == sum(r.completion for r in rounds)
-    if any(r.cost is None for r in rounds):
-        assert row.cost_estimate_micros is None
-    else:
+    expected_micros: int | None = None
+    if all(r.cost is not None for r in rounds):
         # Each round converted to micros once, then summed as integers.
-        costs = [r.cost for r in rounds if r.cost is not None]
-        assert row.cost_estimate_micros == sum(round(c * 1_000_000) for c in costs)
+        expected_micros = sum(round(r.cost * 1_000_000) for r in rounds if r.cost is not None)
+    # One tuple, so a failure shows tokens and cost together.
+    assert (row.prompt_tokens, row.completion_tokens, row.cost_estimate_micros) == (
+        sum(r.prompt for r in rounds),
+        sum(r.completion for r in rounds),
+        expected_micros,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -417,10 +419,8 @@ async def test_unpriced_round_leaves_cost_unknown(
         await _send(client, db_user, chat_id, stream=stream)
 
     row = await _assistant_row(db_session, chat_id)
-    assert row.prompt_tokens == 280
-    assert row.completion_tokens == 55
     # One round is unpriced, so the turn's cost is unknown: NULL, not 12300.
-    assert row.cost_estimate_micros is None
+    assert (row.prompt_tokens, row.completion_tokens, row.cost_estimate_micros) == (280, 55, None)
 
 
 # ---------------------------------------------------------------------------
