@@ -914,10 +914,13 @@ async def execute_tool(
 
 @dataclass
 class LoopRound:
-    """What one model round did. Names and counts only, never arguments or results.
+    """What one model round did.
 
     Returned by :meth:`ChatToolLoop.next_round` after each round, so the
-    caller has control between rounds.
+    caller has control between rounds. Every field but ``outcome`` is a
+    name or a count, never tool arguments or results; ``outcome`` is the
+    full outcome object, which carries arguments and messages, so it must
+    not be sent anywhere as it is.
 
     ``number`` counts the rounds of this run, from 1 (a resumed turn starts
     again at 1; ``usage.rounds`` counts the whole turn). ``tools_offered``
