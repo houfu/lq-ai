@@ -32,6 +32,7 @@ characters.
 from __future__ import annotations
 
 import datetime
+import difflib
 import hashlib
 import re
 import unicodedata
@@ -286,6 +287,8 @@ def _written(node: yaml.Node | None, value: object) -> str:
     if isinstance(node, yaml.ScalarNode):
         if node.style in ("'", '"'):
             return "it is in quotes; write the number without quotes"
+        if node.tag != _INT_TAG and _PLAIN_WHOLE_NUMBER.fullmatch(node.value):
+            return "it is marked as text with a tag such as `!!str`; remove the tag"
         if node.value:
             return f"it is written {_shown(node.value)}"
     return _read_as(value)
@@ -305,24 +308,76 @@ def _key_words(key: object) -> str:
         return "a field name that YAML read as true or false"
     if isinstance(key, (int, float)):
         return f"a field name that YAML read as the number {key}"
+    if key is None:
+        return "a field name that YAML read as empty (`null`, `~` or nothing before the colon)"
     return "a field name that is not text"
 
 
-def _bad_character(text: str, *, allow_newline: bool, format_too: bool) -> str | None:
+def _unknown_field_message(key: str) -> str:
+    """Refuse an unknown field, suggesting the nearest real one."""
+    near = difflib.get_close_matches(key, sorted(_KNOWN_FIELDS), n=1, cutoff=0.75)
+    if near:
+        return f"`{key}` is not a field of an agent file. Did you mean `{near[0]}`?"
+    fields = ", ".join(f"`{name}`" for name in sorted(_KNOWN_FIELDS))
+    return f"`{key}` is not a field of an agent file. The fields are {fields}."
+
+
+def _hiding_character_name(code: int) -> str | None:
+    """Name a character that hides or reorders text on screen, or None.
+
+    Only these are refused. Joiners and marks that real scripts need (the
+    zero-width joiner and non-joiner, the left-to-right and right-to-left
+    marks, the soft hyphen) stay legal.
+    """
+    if 0x202A <= code <= 0x202E:
+        return "a text-direction override"
+    if 0x2066 <= code <= 0x2069:
+        return "a text-direction isolate"
+    if code == 0x200B:
+        return "a zero-width space"
+    if code == 0xFEFF:
+        return "a zero-width no-break space"
+    if code == 0x2060:
+        return "a word joiner"
+    if 0x2061 <= code <= 0x2064:
+        return "an invisible maths operator"
+    if 0xE0000 <= code <= 0xE007F:
+        return "an invisible tag character"
+    return None
+
+
+_CONTROL_NAMES: Final[dict[int, str]] = {
+    0x00: "a null character",
+    0x0B: "a vertical tab",
+    0x0C: "a form feed (page break)",
+}
+
+
+def _bad_character(text: str, *, allow_newline: bool) -> str | None:
     """Describe the first character not allowed in ``text``, or None.
 
     Control characters are refused except tab and, where allowed, newline.
-    With ``format_too``, invisible format characters (such as zero-width
-    spaces and right-to-left overrides) and Unicode line separators are
-    refused as well.
+    Characters that hide or reorder text are refused everywhere, the body
+    included, so the file shows every instruction the model reads.
     """
     for char in text:
         if char == "\t" or (char == "\n" and allow_newline):
             continue
-        category = unicodedata.category(char)
-        if category == "Cc" or (format_too and category in ("Cf", "Zl", "Zp")):
-            kind = "a control character" if category == "Cc" else "an invisible character"
-            return f"{kind} (U+{ord(char):04X})"
+        code = ord(char)
+        hiding = _hiding_character_name(code)
+        if hiding and "direction" in hiding:
+            return (
+                f"{hiding} (U+{code:04X}). It changes the order in which text is shown, "
+                "so the screen does not match what the model reads. Delete it"
+            )
+        if hiding:
+            return (
+                f"{hiding} (U+{code:04X}). It is not shown on screen, but the model "
+                "reads it. Delete it"
+            )
+        if unicodedata.category(char) == "Cc":
+            name = _CONTROL_NAMES.get(code, "a control character")
+            return f"{name} (U+{code:04X}), which cannot be saved. Delete it"
     return None
 
 
@@ -356,7 +411,13 @@ def _yaml_problem(exc: yaml.YAMLError) -> str:
         )
     if "'\\t'" in problem:
         return f"{where} uses a tab. Indent the front matter with spaces, not tabs."
-    if isinstance(exc, yaml.constructor.ConstructorError):
+    if "unhashable key" in problem:
+        return (
+            f"{where} has a field name written as a list or a set of fields, with "
+            "`?` or brackets. A field name is one word: write it as `name: value`, "
+            "for example `title: NDA Comparer`."
+        )
+    if "constructor for the tag" in problem:
         return (
             f"{where} uses a YAML tag (a word starting with `!`). Remove it, or put "
             "the value in quotes."
@@ -569,17 +630,17 @@ class _Validator:
         # kept in the saved text.
         for number, line in enumerate(lines, start=1):
             in_front = number - 1 < close
-            bad = _bad_character(line, allow_newline=False, format_too=in_front)
+            bad = _bad_character(line, allow_newline=False)
             if bad:
                 where = "front matter" if in_front else "body"
-                self.problem(where, f"Line {number} contains {bad}. Remove it.")
+                self.problem(where, f"Line {number} contains {bad}.")
 
     def _check_parsed_text(self, value: object, where: str) -> None:
         """Values can carry characters through YAML escapes such as ``\\0``."""
         if isinstance(value, str):
-            bad = _bad_character(value, allow_newline=True, format_too=True)
+            bad = _bad_character(value, allow_newline=True)
             if bad:
-                self.problem(where or "front matter", f"The value contains {bad}. Remove it.")
+                self.problem(where or "front matter", f"The value contains {bad}.")
         elif isinstance(value, dict):
             for key, item in value.items():
                 name = key if isinstance(key, str) else "front matter"
@@ -653,7 +714,7 @@ class _Validator:
                     "under `metadata`, for example `metadata: {author: Jane Tan}`.",
                 )
             elif key not in _KNOWN_FIELDS:
-                self.problem(key, f"`{key}` is not a field of an agent file.")
+                self.problem(key, _unknown_field_message(key))
 
         self._schema(data, out)
         self._name(data, out)
@@ -728,7 +789,7 @@ class _Validator:
         if not value.strip():
             self.problem(key, f"`{key}` is empty.")
             return
-        if key == "title" and "\n" in value.strip():
+        if key == "title" and any(c in value.strip() for c in "\n\u2028\u2029"):
             self.problem("title", "`title` must be one line.")
             return
         out[key] = value

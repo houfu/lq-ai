@@ -421,7 +421,43 @@ def test_exit_test_step_4_workspace_own_is_refused_as_reserved() -> None:
 @pytest.mark.parametrize("key", ["foo", "maxTurns", "Name"])
 def test_unknown_fields_are_refused(key: str) -> None:
     problems = refused(with_line(f"{key}: 1"))
-    assert problems == {key: f"`{key}` is not a field of an agent file."}
+    assert list(problems) == [key]
+    assert problems[key].startswith(f"`{key}` is not a field of an agent file.")
+
+
+@pytest.mark.parametrize(
+    ("key", "near"),
+    [("descripton", "description"), ("skill", "skills"), ("titel", "title"), ("Name", "name")],
+)
+def test_a_mistyped_field_gets_the_near_match(key: str, near: str) -> None:
+    message = refused(with_line(f"{key}: 1"))[key]
+    assert message.endswith(f"Did you mean `{near}`?")
+
+
+def test_a_field_with_no_near_match_gets_the_list_of_fields() -> None:
+    message = refused(with_line("colour: red"))["colour"]
+    assert "The fields are `description`, `knowledge`" in message
+    for name in ("schema", "name", "title", "tools", "limits", "version"):
+        assert f"`{name}`" in message
+
+
+@pytest.mark.parametrize("line", ["? [a]\n: x", "? {a: b}\n: x", "metadata: {? [a] : b}"])
+def test_a_list_or_mapping_as_a_field_name_gets_its_own_message(line: str) -> None:
+    message = refused(with_line(line))["front matter"]
+    assert "field name written as a list or a set of fields" in message
+    assert "tag" not in message
+
+
+def test_schema_marked_as_text_says_to_remove_the_tag() -> None:
+    message = refused(file_text(MINIMAL.replace("schema: 1", "schema: !!str 1")))["schema"]
+    assert "marked as text with a tag such as `!!str`" in message
+    assert "it is written `1`" not in message
+
+
+@pytest.mark.parametrize("key", ["null", "~"])
+def test_an_empty_field_name_says_what_yaml_read(key: str) -> None:
+    message = refused(with_line(f"{key}: x"))["front matter"]
+    assert "YAML read as empty" in message
 
 
 @pytest.mark.parametrize(
@@ -712,7 +748,15 @@ def test_mode_is_a_required_keyword() -> None:
 )
 def test_control_characters_are_refused(text: str, field: str) -> None:
     message = refused(text)[field]
-    assert "control character" in message
+    assert "which cannot be saved. Delete it." in message
+
+
+@pytest.mark.parametrize(
+    ("char", "words"),
+    [("\x00", "a null character"), ("\x0b", "a vertical tab"), ("\x0c", "a form feed")],
+)
+def test_common_control_characters_are_named_in_words(char: str, words: str) -> None:
+    assert words in refused(file_text(body=f"a{char}b"))["body"]
 
 
 def test_tab_and_newline_stay_legal_in_the_body() -> None:
@@ -721,26 +765,76 @@ def test_tab_and_newline_stay_legal_in_the_body() -> None:
     assert "\t" in agent.instructions
 
 
-@pytest.mark.parametrize(
-    ("line", "field"),
-    [
-        ('title: "\\u200b"', "title"),
-        ('title: "\\u202eevil\\u202c"', "title"),
-        ('metadata: {note: "a\\u2028b"}', "metadata.note"),
-        ("title: \u202eevil", "front matter"),
-        ("# \u200b hidden", "front matter"),
-    ],
-)
-def test_invisible_format_characters_are_refused_in_the_front_matter(line: str, field: str) -> None:
-    assert "invisible character" in refused(with_line(line))[field]
+# Characters that hide or reorder text are refused everywhere, the body
+# included, so the file shows every instruction the model reads (review 2,
+# findings 1 and 3). Joiners and marks that real scripts need stay legal.
+HIDING = [
+    ("\u202a", "a text-direction override"),
+    ("\u202e", "a text-direction override"),
+    ("\u2066", "a text-direction isolate"),
+    ("\u2069", "a text-direction isolate"),
+    ("\u200b", "a zero-width space"),
+    ("\ufeff", "a zero-width no-break space"),
+    ("\u2060", "a word joiner"),
+    ("\u2062", "an invisible maths operator"),
+    ("\U000e0000", "an invisible tag character"),
+    ("\U000e0041", "an invisible tag character"),
+    ("\U000e007f", "an invisible tag character"),
+]
 
 
-def test_invisible_characters_stay_legal_in_the_body() -> None:
-    accepted(file_text(body="a\u200db\n"))
+@pytest.mark.parametrize(("char", "words"), HIDING)
+def test_hiding_characters_are_refused_in_front_matter_values(char: str, words: str) -> None:
+    escaped = f"\\U{ord(char):08x}"
+    message = refused(with_line(f'title: "a{escaped}b"'))["title"]
+    assert f"{words} (U+{ord(char):04X})" in message
+    assert "Remove it" not in message
+
+
+@pytest.mark.parametrize(("char", "words"), HIDING)
+def test_hiding_characters_are_refused_in_raw_front_matter_and_comments(
+    char: str, words: str
+) -> None:
+    assert words in refused(with_line(f"title: a{char}b"))["front matter"]
+    assert words in refused(with_line(f"# a{char}b"))["front matter"]
+
+
+@pytest.mark.parametrize(("char", "words"), HIDING)
+def test_hiding_characters_are_refused_in_the_body(char: str, words: str) -> None:
+    message = refused(file_text(body=f"Do this.{char}\n"))["body"]
+    assert message.startswith(f"Line 7 contains {words}")
+
+
+def test_direction_controls_say_the_screen_does_not_match() -> None:
+    message = refused(file_text(body="a\u202eb\n"))["body"]
+    assert "changes the order in which text is shown" in message
+
+
+LEGAL_SCRIPT_TEXT = [
+    "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645",  # Persian, zero-width non-joiner
+    "\u0915\u094d\u200d\u0937",  # Devanagari, zero-width joiner
+    "Judge \U0001f468\u200d\u2696\ufe0f",  # emoji built with a joiner
+    "con\u00adfidential",  # soft hyphen, as Word pastes it
+    "\u0639\u0642\u062f\u200f",  # Arabic with a right-to-left mark
+    "abc\u200e",  # left-to-right mark
+    "Cafe\u0301",  # combining accent
+]
+
+
+@pytest.mark.parametrize("value", LEGAL_SCRIPT_TEXT)
+def test_joiners_and_marks_real_scripts_need_stay_legal(value: str) -> None:
+    agent = accepted(with_line(f'title: "{value}"')).agent
+    assert agent is not None
+    assert agent.title == value
+    assert accepted(with_line(f"# {value}")).agent is not None
+    body = accepted(file_text(body=f"{value}\n")).agent
+    assert body is not None
+    assert body.instructions == f"{value}\n"
 
 
 def test_title_must_be_one_line() -> None:
     assert refused(with_line('title: "a\\nb"'))["title"] == "`title` must be one line."
+    assert refused(with_line('title: "a\\u2028b"'))["title"] == "`title` must be one line."
     accepted(with_line("title: >-\n  one line"))
 
 
@@ -848,6 +942,11 @@ REFUSE_CORPUS: list[tuple[str, AgentFileMode]] = (
             "skills: [a",
             "title: !!python/object:os.system x",
             "title: !custom x",
+            "? [a]\n: x",
+            "metadata: {? [a] : b}",
+            "descripton: x",
+            "colour: red",
+            "~: x",
             "metadata: &m {a: b}",
             "limits: {<<: {max_tool_calls: 2}}",
             "name: again",
