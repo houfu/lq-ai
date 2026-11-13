@@ -26,6 +26,24 @@ valid_names = st.from_regex(r"\A[a-z][a-z0-9-]{0,63}\Z")
 any_text = st.text(max_size=80)
 # Control characters (other than tab and newline) are refused in the body.
 _NOT_SAVEABLE: list[Literal["Cc", "Cs"]] = ["Cc", "Cs"]
+# Characters that hide or reorder text are refused everywhere, the body included.
+_HIDING = "".join(
+    chr(code)
+    for low, high in [
+        (0x202A, 0x202E),
+        (0x2066, 0x2069),
+        (0x200B, 0x200B),
+        (0xFEFF, 0xFEFF),
+        (0x2060, 0x2064),
+        (0xE0000, 0xE007F),
+    ]
+    for code in range(low, high + 1)
+)
+
+
+def quoted(text: str) -> str:
+    """A YAML double-quoted scalar, so `on` or `no` stays text."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
 def agent_text(name: str, body: str = "", version: int | None = None) -> str:
@@ -33,7 +51,7 @@ def agent_text(name: str, body: str = "", version: int | None = None) -> str:
     return (
         "---\nschema: 1\n"
         f"{version_line}"
-        f"name: {name}\n"
+        f"name: {quoted(name)}\n"
         "description: A property test.\n"
         "tools: chat\n"
         f"---\n{body}"
@@ -49,8 +67,7 @@ def test_every_name_matching_the_rule_is_accepted(name: str) -> None:
 
 @given(any_text)
 def test_names_outside_the_rule_are_refused(name: str) -> None:
-    quoted = '"' + name.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    result = validate_agent_file(agent_text(quoted), mode="store")
+    result = validate_agent_file(agent_text(name), mode="store")
     matches = bool(_RULE.fullmatch(name)) and len(name) <= NAME_MAX_LENGTH
     assert (result.agent is not None) == matches
 
@@ -65,7 +82,11 @@ def test_fingerprint_ignores_line_endings(lines: list[str]) -> None:
 @given(
     valid_names,
     st.text(
-        alphabet=st.characters(exclude_categories=_NOT_SAVEABLE, include_characters="\t\n"),
+        alphabet=st.characters(
+            exclude_categories=_NOT_SAVEABLE,
+            exclude_characters=_HIDING,
+            include_characters="\t\n",
+        ),
         max_size=200,
     ),
     st.one_of(st.none(), st.integers(min_value=1, max_value=10_000)),

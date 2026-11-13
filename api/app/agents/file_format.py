@@ -346,6 +346,31 @@ def _hiding_character_name(code: int) -> str | None:
     return None
 
 
+_RAW_LINE_BREAKS: Final[dict[str, str]] = {
+    "\u2028": "a line separator",
+    "\u2029": "a paragraph separator",
+}
+
+
+def _raw_line_break(line: str) -> str | None:
+    """Describe a Unicode line break written raw in the front matter, or None.
+
+    YAML reads U+2028 and U+2029 as line breaks, but the file is split into
+    lines on ``\\n`` only. Written raw, they would put YAML's line numbers
+    out of step with the file's, and the ``version`` field would be cut from
+    the wrong lines. Inside a double-quoted value the escapes ``\\u2028``
+    and ``\\u2029`` still work.
+    """
+    for char in line:
+        name = _RAW_LINE_BREAKS.get(char)
+        if name:
+            return (
+                f"{name} (U+{ord(char):04X}), which YAML reads as a line break. "
+                "Replace it with an ordinary line break or a space"
+            )
+    return None
+
+
 _CONTROL_NAMES: Final[dict[int, str]] = {
     0x00: "a null character",
     0x0B: "a vertical tab",
@@ -631,6 +656,8 @@ class _Validator:
         for number, line in enumerate(lines, start=1):
             in_front = number - 1 < close
             bad = _bad_character(line, allow_newline=False)
+            if in_front and not bad:
+                bad = _raw_line_break(line)
             if bad:
                 where = "front matter" if in_front else "body"
                 self.problem(where, f"Line {number} contains {bad}.")
