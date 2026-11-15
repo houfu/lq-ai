@@ -1,6 +1,6 @@
 # Agent builder: what it is and how we get there
 
-**Status:** Draft 18, for the maintainer. **Date:** 2026-11-13. Committed to `docs/plans/` for the ADR's pull request. Lines that locate the privately tracked defects have been removed. Nothing in this plan is built. No ADR is adopted. Code facts are read, not run, except two probes named in annex H; a few are reported from private notes (annex H).
+**Status:** Draft 19, for the maintainer. **Date:** 2026-11-16. Committed to `docs/plans/` for the ADR's pull request. Lines that locate the privately tracked defects have been removed. Slice 0 has run, and five Stage 1 slices are written on branches; none is merged, and nothing here is in a release. No ADR is adopted. Code facts are read, not run, except two probes and the Slice 0 runs named in annex H; a few are reported from private notes (annex H).
 Sizes, days and dates are estimates. Reference detail is in the [annexes](2026-11-agent-builder-annexes.md). The glossary is [annex K](2026-11-agent-builder-annexes.md#k-glossary).
 
 ## Summary
@@ -9,9 +9,9 @@ Sizes, days and dates are estimates. Reference detail is in the [annexes](2026-1
 2. **Today.** A user cannot save a chat's set-up under a name, read it as a file, or hand it on. Chat has no system prompt of its own, loads every attached skill in full, and fetches knowledge before the model is asked.
 3. **How a turn is built.** The server builds each request from the file. The system prompt is an LQ.AI prompt, the operator's text, the agent's instructions and a list of skills. The model thinks, loads a skill, searches, and repeats until it answers. Each call to the model is a round. Every round passes through the gateway, the one component that holds the provider keys.
 4. **The file asks; the operator and the matter decide.** The whole file is checked before the first model call, and a refusal says why.
-5. **This week.** One task, Slice 0: on a branch, the example agent's model picks a skill from a list and loads it. Shown at the 15 November call. A slice is one pull request's worth of work, about 400 changed lines.
+5. **What is built.** Slice 0 has run: on a throwaway branch, the example agent's model picked a skill from a list and loaded it, on a local model in 6 runs of 7 and on one cloud model in 3 of 3. Five Stage 1 slices are written on branches and reviewed; none is merged. A slice is one pull request's worth of work, about 400 changed lines.
 6. **Order.** Stage 1: paste a file and use it. Stage 2: build one on screen. Stage 3: tools. Then a history tool. Stage 4: the agent's own workspace. Then agents contributed by pull request. Sub-agents: a trial, an ADR, then the build. Ruled 12 November: this order, Stage 1 finished before Stage 2 starts, and no early usable point inside Stage 1.
-7. **Effort.** About 102 working days, as a floor. Stage 1 is estimated at 48 days, and that is a floor too: work the rulings require has no slice yet (annex I). At an assumed 8 days a month, Stage 1 ends about 25 May 2027, if the redesigned shell has merged by the end of March, and agents are announced as usable then. Operators get agents, off by default, in the first release after that, which has no date; the release after it turns them on for every install. The builder screen follows in early July 2027, and sub-agents in mid-November 2027 at the earliest. These are a build-plan session's estimates, with no slack. They leave out the privately tracked fixes, which are not sized: three that go first, and a fourth added on 13 November.
+7. **Effort.** About 125 working days, as a floor. Stage 1 is estimated at 70.75 days in 43 slices, re-cut on 16 November from 48 days in 31. That is a floor too: four slices are rounded down, and the estimates count source lines, not tests (annex I). At an assumed 8 days a month, Stage 1 ends about 12 August 2027, if the redesigned shell has merged by early June, and agents are announced as usable then. Operators get agents, off by default, in the first release after that, which has no date; the release after it turns them on for every install. The builder screen follows in late September 2027, and sub-agents in mid-February 2028 at the earliest. These are a build-plan session's estimates, with no slack. The first five slices were written faster than the rate says, and the dates are not moved for that, because none has merged. The dates leave out the privately tracked fixes, which are not sized: three that go first, and a fourth added on 13 November.
 8. **What changes for every chat.** Every chat gets the LQ.AI system prompt. Missing skill inputs no longer refuse a skill. Tool-loop turns show tokens and cost summed over their rounds. Progress events and Stop reach every tool turn. Stage 1 ships with agents off by default, and there chat is otherwise as today. With agents on, a chat with none chosen runs the default agent, and a picked model lasts one turn. Ruled 13 November: the release after Stage 1 turns agents on for every install, unless a stated blocker is open, and removes the setting and the old chat path together. New harness stays as merged and frozen.
 
 ## What it would be
@@ -83,7 +83,7 @@ Each item says who decides it. Each is given in full in [annex M](2026-11-agent-
 5. **Each round is a full gateway request,** so every round passes the tier, pseudonymization and logging checks. The price is time. The chat shows live step lines while a turn works; the answer arrives word by word only from slice 3e. *Decided by the ADR.*
 6. **The server holds a chat's agent.** The chat points at one saved version, frozen for each turn when it starts. It stays on that version until the user moves it. One chat can hold turns from several agents, and each reply row and record names what ran it. *Decided by the ADR.*
 7. **A refused item stops the turn.** The notice names the item and offers "run this turn without it". Nothing is dropped silently, with one exception: a chat whose agent is retired or deleted moves to the default agent, and says so. *Decided by the ADR.*
-8. **Stage 1 has one end.** Nobody is told agents are usable until everything ruled into Stage 1 is on `main`, slice 3e included: about 25 May 2027 on the build plan's estimate. *The maintainer's ruling on build order; not an ADR decision.*
+8. **Stage 1 has one end.** Nobody is told agents are usable until everything ruled into Stage 1 is on `main`, slice 3e included: about 12 August 2027 on the build plan's estimate. *The maintainer's ruling on build order; not an ADR decision.*
 9. **Agents replace ordinary chat.** Stage 1 ships with agents off by default and labelled experimental; the setting is the operator's. The next minor release turns agents on for every install, unless a stated blocker is open, and removes the setting and the old chat path together, with no switch back. Two tests from ADR 0038 must be shown met first. The removal has no slice, size or date. *Decided by the ADR.*
 
 ## How a turn is built
@@ -102,7 +102,7 @@ Each item says who decides it. Each is given in full in [annex M](2026-11-agent-
    On agent turns that can search knowledge, the rule for citing passages is a part of its own. Its place was answered twice on 13 November, last and straight after part 1, and is not reconciled (open question 39).
 6. **Tools are offered:** `load_skill`, when the file lists a skill; `search_knowledge`, in a matter, unless the file says `knowledge: none`; what `tools` asks for; each loaded skill's own tools. Later: `search_history`, the workspace tools, `delegate`.
 7. **The loop.** The model thinks and calls tools. The server runs them and sends the results back. `load_skill` attaches the named skill to the request, and the gateway merges it on the next round with its usual checks. The skill stays loaded for the rest of the turn.
-8. **The final answer.** The model answers without a tool call, or a limit is reached and one last round runs with tools off; the reply says which. An agent turn has two limits: rounds (an operator setting, 20 by default, which the file may lower) and an optional spend limit per turn. Stop, a closed tab or a lost connection ends the turn at the next round boundary, and the reply is saved as stopped with what was gathered.
+8. **The final answer.** The model answers without a tool call, or a limit is reached and one last round runs with tools off; the reply says which. An agent turn has two limits: rounds (an operator setting, 20 by default, which the file may lower) and an optional spend limit per turn. The spend limit counts every model call the turn causes: the chat model's rounds, the embeddings and the citation judges. The judges run after the last round, so they are counted and never stopped. Stop, a closed tab or a lost connection ends the turn at the next round boundary, and the reply is saved as stopped with what was gathered.
 9. **The record** is written: the agent's id, version and fingerprint, as frozen in step 2; the skills offered and loaded; the tools offered and called. On each round the gateway reports what it assembled in one `lq_ai_assembled` object, and the backend copies that into the record. So the record says what the gateway built, not what the backend asked for. Every fingerprint is over saved text a user can read.
 
 After step 3, each item in the file is one of:
@@ -122,7 +122,7 @@ Tier 1 is the strongest and tier 5 the weakest. A file cannot set a tier, pseudo
 
 **Records.** A saved version is never edited. The `chat.message_sent` audit row is the one full record of an agent turn. It carries ids, versions and what was used, as the gateway reported it, with a name and fingerprint for every part of the prompt. No agent, skill or prompt text enters it. So the claim is "the record says which", not "you can re-read the prompt": a past turn's text can be read back only for agent versions and the LQ.AI prompt.
 
-The reply row gains the agent's id, its version, and how the reply ended. A refused turn has an audit row that names the agent, and saves nothing else. Agents are not announced as usable until all of these records are on `main`.
+The reply row gains the agent's id, its version, and how the reply ended. Its stored cost stays the chat model's; the record lists the turn's embedding and judge costs by kind beside it. A refused turn has an audit row that names the agent, and saves nothing else. Agents are not announced as usable until all of these records are on `main`.
 
 Ruled on 13 November. Verified citations carry over to agent turns: `search_knowledge` returns numbered passages, and the reply's quotations are checked against them as today. Attached-file text, and the passages the previous reply cited, travel in a system message of their own. A turn that fails part-way, or whose pause runs out, leaves a reply and a record, written together; on an agent turn a successful reply is not saved without its record. A version that ran in a matter is retired, not deleted, while the matter is open.
 
@@ -132,7 +132,7 @@ Detail, with the code read: [annex B](2026-11-agent-builder-annexes.md#b-how-a-t
 
 ## Where the rest is
 
-- **Slots, stages, the Stage 1 slice table, the exit test, dates, risks, what is not in this plan, and this week's task (Slice 0):** [annex I](2026-11-agent-builder-annexes.md#i-slots-stages-dates-and-this-week). Stage 1 was re-sized on 12 and 13 November by a build-plan session, and the maintainer made eight rulings there (B1 to B8). Stages 2 to 4 were not re-sized, so their dates are floors. File paths and code facts are in `build-plan/build-plan.md`, outside this plan.
+- **Slots, stages, the Stage 1 slice table, the exit test, dates, risks, what is not in this plan, and Slice 0 and what it showed:** [annex I](2026-11-agent-builder-annexes.md#i-slots-stages-dates-and-this-week). Stage 1 was re-sized on 12, 13 and 16 November by a build-plan session, and the maintainer made twelve rulings there (B1 to B12). Stages 2 to 4 were not re-sized, so their dates are floors. File paths and code facts are in `build-plan/build-plan.md`, outside this plan.
 - **The builder screen, drawn, and how a person builds an agent on it:** [annex C](2026-11-agent-builder-annexes.md#c-slices-for-stages-2-to-4-the-history-tool-and-contributed-agents).
 - **The commitments and six passages of the turn, in full:** [annex M](2026-11-agent-builder-annexes.md#m-the-main-plans-fuller-text).
 - **What changed since draft 4, ruling by ruling:** [annex J](2026-11-agent-builder-annexes.md#j-changes-since-draft-4).
@@ -141,25 +141,30 @@ Detail, with the code read: [annex B](2026-11-agent-builder-annexes.md#b-how-a-t
 
 ## Open questions for the maintainer
 
-Numbers are kept from earlier drafts. Settled and moved to annex J: 2, 4, 5, 7 to 11, 14, 18, 19, 24, 25 and 28 to 38.
+Numbers are kept from earlier drafts. Settled and moved to annex J: 2, 4, 5, 7 to 11, 14, 18 to 20, 24, 25, 28 to 38 and 51.
 
-- **1.** How many days a month go to this plan? Every date follows from the answer. At 8 a month Stage 1 ends in late May 2027, beside the roadmap's Candidate train (30 April) and the earliest 1.0 tag (May).
-- **3.** Who, besides the maintainer, can review interface slices? The answer decides whether any of the eight Stage 1 screens can go to a contributor.
+- **1.** How many days a month go to this plan? Every date follows from the answer. At 8 a month Stage 1 ends in mid-August 2027, more than three months after the roadmap's Candidate train (30 April) and after the earliest 1.0 tag (May). Slice 0 and the first five slices were written in four days, against nine at the plan's rate; they then waited on review, rulings and the ADR. Should the dates be re-based once one of them has merged?
+- **3.** Who, besides the maintainer, can review interface slices? The answer decides whether any of the nine Stage 1 screens can go to a contributor.
 - **6.** On a pseudonymizing route, should the gateway cover and restore per tool (risk 3)?
 - **12.** How is a `plan`'s approval recorded? Where it lives and its stage were ruled on 12 November: in the chat, on the sub-agents track.
 - **13.** Until the release after Stage 1 the agents setting is the operator's, so turning it on gives every user on the install the default agent; after that release every chat has one. Should a user be able to opt out? Not yet put to the maintainer.
 - **15.** Where is a dismissed "newer version" notice remembered: server or browser? Parked by the interface discussion on 13 November.
-- **16.** Does the stock `gateway.yaml.example` change its `local` model to Gemma 4? A separate security-path change, after Slice 0.
+- **16.** Does the stock `gateway.yaml.example` change its `local` model to Gemma 4? A separate security-path change. Slice 0 has now run, on Gemma 4.
 - **17.** The file's name for the rounds limit (`limits.max_tool_calls` today).
 
 Asked by the build-plan session and not ruled. Its sizes assume its recommended answers ([annex I](2026-11-agent-builder-annexes.md#i-slots-stages-dates-and-this-week)):
 
-- **20.** May slice 0b merge before the ADR? It changes no behaviour.
 - **21.** Where does "Agents" sit in the redesigned sidebar? ADR 0045 lists New, Home, Tabular, Labs and Customise, and its comments close on 20 November. Put to the maintainer on 13 November: "Decide later".
 - **22.** What stops an operator turning agents on from a release cut in the middle of Stage 1? The setting ships in slice 1f-1, and releases are due before Stage 1 ends.
 - **23.** Where does the LQ.AI prompt file live?
 - **26.** What does the read screen show for operator instructions? The build-plan session found no such setting; the interface discussion describes one. Not reconciled.
-- **27.** After the required-inputs check is removed, does the web chat still block a send when a skill's input form is incomplete? The browser checks by itself today (a survey finding, not re-checked).
+- **27.** After the required-inputs check is removed, does the web chat still block a send when a skill's input form is incomplete? The browser checks by itself today. Slice 1m-8 is sized as "warn and let the send go".
+- **45.** The DE-388 evaluation's inputs: which cloud model, how many repeats of each run, and who labels the replies that are labelled by hand. Slice 1t-2's half day of labelling assumes 144 replies.
+- **46.** May slice 1t-1, the corpus, merge before the ADR? It is test data and changes no behaviour. It is written.
+- **47.** Does the check call cover the default agent? Its path names a version, and the default agent's pointer has none.
+- **48.** Does ruling B5, "the private fixes go first", cover the fourth, added on 13 November?
+- **49.** Slice 3e is split in two, a gateway change and an API change, because together they pass 400 lines. The ruling speaks of one slice. Accept the split?
+- **50.** Is the new layout of document text on the list of every-chat changes? From slice 1a-1, document text in a chat with a skill attached no longer sits under the operator heading. Annex E decision 8 does not name it.
 
 Answered twice on 13 November. Which answer stands?
 
@@ -173,6 +178,6 @@ Raised by the rulings of 13 November and not put to the maintainer:
 - **43.** Does "experimental" come off when agents turn on for every install? Is the untested risk that a small local model does not call tools a named blocker, once there is no server-side knowledge fetch to fall back on?
 - **44.** What does the ADR say about ADRs 0025 (a breaking change), 0029 (the definition of 1.0) and 0031 (API-only clients)? And what is a New harness run once every chat turn has an agent?
 
-Ten smaller open items, most owned by a slice or by the maintainer, are in [annex I](2026-11-agent-builder-annexes.md#open-items-with-an-owner).
+Eleven smaller open items, most owned by a slice or by the maintainer, are in [annex I](2026-11-agent-builder-annexes.md#open-items-with-an-owner).
 
 **Decided in this draft:** 50 items, each with the alternative declined, are in [annex L](2026-11-agent-builder-annexes.md#l-decided-in-this-draft). Confirm each.

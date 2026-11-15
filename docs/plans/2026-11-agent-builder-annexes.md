@@ -1,6 +1,6 @@
 # Agent builder: annexes
 
-**Status:** Draft 18. **Date:** 2026-11-13. Changes since draft 4 are listed in annex J. Nothing here is built. No ADR is adopted. Code facts are read, not run, except two probes named in annex H; a few are reported from private notes (annex H).
+**Status:** Draft 19. **Date:** 2026-11-16. Changes since draft 4 are listed in annex J. Slice 0 has run, and five Stage 1 slices are written on branches; none is merged (annex I). No ADR is adopted. Code facts are read, not run, except two probes and the Slice 0 runs named in annex H; a few are reported from private notes (annex H).
 Reference detail for [the plan](2026-11-agent-builder.md). All sizes, days and dates are estimates.
 
 - [A. File format v1](#a-file-format-v1)
@@ -37,7 +37,7 @@ The ADR ratifies **only the fields in this table**. Nothing else.
 | `skills` | the list the model may load from: slugs, or `{name, optional}` | no list and no `load_skill` tool | 1 | `skills`; there they are preloaded, so the meaning differs and import says so |
 | `knowledge` | what `search_knowledge` may search: `none`; or a list of `matter`, a name, or `{name, optional}` | `[matter]` | `matter`/`none` from 1; names from 2 | none; lossy |
 | `tools` (required) | `chat`; `none`; or a list of selectors (A2) | refused | `chat` from 1; the rest from 3 | `tools`; `connector:x` ↔ `mcp__x__*`; other names do not map |
-| `limits` | `max_tool_calls`. On an agent turn this is a limit on rounds, and may only lower the operator's number. The field's name is not ruled | operator's limit (20 rounds by default) | 1 in the build plan (slice 1p); the stage is not ruled | `maxTurns`, roughly |
+| `limits` | `max_tool_calls`. On an agent turn this is a limit on rounds, and may only lower the operator's number. The field's name is not ruled | operator's limit (20 rounds by default) | 1 in the build plan (slice 1p-2); the stage is not ruled | `maxTurns`, roughly |
 
 **Reserved names.** Refused at save, with the reason, until their own decisions:
 
@@ -83,7 +83,7 @@ Draft 3 reserved a separate field for skills the model chooses. It is gone: `ski
 8. **Workspace tool names.** Reserved. The intent: three tools, list, read and write, modelled on today's skill workspace tools, which come with `workspace`, independent of `tools`. The Stage 4 slices fix the names and print them on the agent page.
 9. **Workspace outside a matter, or for a matter member who is not the owner.** Reserved. The intent: "Not available: needs a matter", and today's owner-only rule kept. The Stage 4 decision settles both.
 10. **Can `workspace` be optional?** Reserved. The intent is yes, so an agent runs where the operator has workspaces off.
-11. **`limits` above the operator's limit.** Clamped at send, never refused: the file may lower the rounds limit, never raise it. The record and the agent page say so. Save cannot know another deployment's cap. Ruled 13 November (API R82): where the operator has set a spend limit, a turn whose model is on a paid route with no price configured is refused at the check, in a 409 item that names the model. With no limit set it runs, bounded by rounds, and the record says "unpriced". Local models count as priced at zero.
+11. **`limits` above the operator's limit.** Clamped at send, never refused: the file may lower the rounds limit, never raise it. The record and the agent page say so. Save cannot know another deployment's cap. Ruled 13 November (API R82): where the operator has set a spend limit, a turn whose model is on a paid route with no price configured is refused at the check, in a 409 item that names the model. With no limit set it runs, bounded by rounds, and the record says "unpriced". R82 also said local models count as priced at zero. Ruled 15 November: a model with no rate entry is unpriced, local or not, and an operator gives a local model a zero rate to have its cost recorded. Ruled 16 November (B12): an unpriced embedding or judge route is refused at the check in the same way, because the spend limit counts those calls too.
 12. **Empty body.** Valid. Such an agent is a named set-up of model, skills and knowledge. The system prompt has no agent section.
 13. **`memory`.** Refused, with "for notes the agent keeps, see `workspace`; for earlier messages of this chat, see `history`".
 14. **Comments.** Allowed and kept. They are part of the text, so of the fingerprint. Changing a comment makes a new version.
@@ -104,8 +104,10 @@ Draft 3 reserved a separate field for skills the model chooses. It is gone: `ski
 
 ### A5. To settle in slice 1d
 
-(a) Whether a not-yet-supported field marked `optional` may save with a notice, so one file works on old and new deployments.
-(b) The validator's two modes, store and repo (point 17). The ADR lists them.
+(a) Whether a not-yet-supported field marked `optional` may save with a notice, so one file works on old and new deployments. Settled 15 November: no. It is refused, as slice 1d was built.
+(b) The validator's two modes, store and repo (point 17). The ADR lists them. Settled 15 November: the two modes differ only in how they treat `version`, and a repository file must carry it. The first build let a repository file leave it out; that was changed.
+
+Also settled on 15 November, from what slice 1d built: a byte-order mark at the start of a file is refused, not stripped. The rule against hidden characters stays as built, and the format's documents state both of its limits: some hidden text still passes in the body, and some real text is refused. Twelve further choices the code makes that this annex does not rule stand for now; they are drafted as proposed text for this annex and are not yet folded in.
 (c) Settled 12 November: agent turns count rounds, so a load and a call to a skill's own tool are ordinary rounds.
 (d) Settled 13 November: no. It can be retired (A4).
 (e) Settled 12 November: a loaded skill lasts for the turn only.
@@ -151,12 +153,12 @@ The chat tool loop is `run_chat_tool_loop` (`api/app/chat/tool_loop.py:787`). Ea
 
 Declined: returning the skill's text as a tool result, which skips those checks.
 
-What the loop slices must handle, from the code as read (`load_skill` is slice 1h; the hand-back after each round is 0b, progress events 1n, stop 1o, the limits 1p):
+What the loop slices must handle, from the code as read (`load_skill` is slice 1h; the hand-back after each round is 0b, progress events 1n, stop 1o, the limits 1p-1 and 1p-2):
 
 - The loop copies one base request each round (`tool_loop.py:1075-1082`; used at `:876, 880, 1010, 1015`). The tool executor cannot see it, so the loop handles a load itself and rebinds the base request with the new skill set. The load still writes one row in the tool-call log through the governed path, like any tool; The loop calls the same governed entry point as every tool, so the row, tier 0 and digest are written the same way, and it applies the effect of the load after that call returns (API R45).
 - Dispatch needs its own branch: any tool kind that is not skill, research or authority falls through to connectors (`tool_loop.py:680-687`).
 - A skill's own tools are added once, before the loop (`chats.py:1861`). Tool schemas are re-read each round (`tool_loop.py:882`), so adding the loaded skill's tools to the allowlist is enough.
-- On agent turns the loop counts rounds, not tool calls: an operator setting, 20 by default, with an optional spend limit per turn beside it. A load is an ordinary round, so the earlier special case for load-only rounds is gone. At a limit the loop runs one last round with tools off (today's directive is at `tool_loop.py:1009-1011, 1022-1028`), and the reply and a progress event say the limit was reached. On an install with agents off, chat keeps its cap of 8 calls, until the old chat path is removed (ADR R26). The spend limit is a threshold checked after each round, and only the rounds limit applies to local models. There is no count of tool calls within a round (API R37).
+- On agent turns the loop counts rounds, not tool calls: an operator setting, 20 by default, with an optional spend limit per turn beside it. A load is an ordinary round, so the earlier special case for load-only rounds is gone. At a limit the loop runs one last round with tools off (today's directive is at `tool_loop.py:1009-1011, 1022-1028`), and the reply and a progress event say the limit was reached. On an install with agents off, chat keeps its cap of 8 calls, until the old chat path is removed (ADR R26). The spend limit is a threshold checked after each round. Ruled 15 and 16 November: it counts every model call the turn causes, embeddings and citation-judge calls included. No judge or embedding call hands back its cost today, so slice 1p-1 collects them. The judges run after the last round, so they are counted and never stopped, and a turn's total may pass the limit by their cost (B9). The treatment job, which runs after the turn, is left out (B10). On a local model the spend limit does not bite, because its cost is zero or unpriced: only the rounds limit applies. There is no count of tool calls within a round (API R37).
 - The loaded set must survive a pause and be there on the resumed turn.
 - A second load of the same skill is a no-op with a result that says so.
 - The loop does not check for a stop today. New: closing the stream, or an explicit stop call, ends the turn at the next round boundary. The round in flight finishes, no further tool runs, and the reply is saved as stopped with what was gathered. Ruled 13 November: both ship in one slice, which starts by verifying what a closed stream does to a running loop today (API R46). A stopped reply always has text: a fixed line saying it was stopped and after how many rounds, then anything already written (API R37). Stop applies to every tool turn, agents on or off (API R36).
@@ -166,7 +168,7 @@ What the loop slices must handle, from the code as read (`load_skill` is slice 1
 
 ### B4. Knowledge, history and pseudonymization
 
-**`search_knowledge` (slice 1i)** is a chat tool backed by chat's own retrieval, `_retrieve_kb_context_for_chat` (`chats.py:1189`), which searches by meaning and by keyword. Today the send path writes a retrieval audit row only when passages come back (`chats.py:1666, 1687-1701`). New in 1i: the tool writes a row for every search, empty ones included. Ruled 13 November (audit 15, API R83): that row names the embedding's provider and tier, or "keyword only" when no embedding was made. The tool sends the turn's chat and message ids with the embeddings request, and the gateway writes them on its routing-log row. The tool-call row stays tier 0, which there means the tool, not the embedding. New harness has a tool of a similar name, but in another registry and with keyword matching only (`api/app/autonomous/orchestration/tools.py:376-505`); it is not ported.
+**`search_knowledge` (slice 1i-2, with the gateway change in 1i-1)** is a chat tool backed by chat's own retrieval, `_retrieve_kb_context_for_chat` (`chats.py:1189`), which searches by meaning and by keyword. Today the send path writes a retrieval audit row only when passages come back (`chats.py:1666, 1687-1701`). New in 1i: the tool writes a row for every search, empty ones included. Ruled 13 November (audit 15, API R83): that row names the embedding's provider and tier, or "keyword only" when no embedding was made. The tool sends the turn's chat and message ids with the embeddings request, and the gateway writes them on its routing-log row. The tool-call row stays tier 0, which there means the tool, not the embedding. New harness has a tool of a similar name, but in another registry and with keyword matching only (`api/app/autonomous/orchestration/tools.py:376-505`); it is not ported.
 
 **`search_history` (slice H1)** searches this chat's messages that fell out of the window.
 **The pseudonymization problem, unsolved.** In ordinary chat, tool results are sent as they are and tool-call arguments come back as the model wrote them. One request-wide switch changes both at once: it covers tool results and restores arguments (`gateway/app/anonymization/middleware.py:141-145, 160-167, 337-349`). Only governed runs set it (`api/app/autonomous/`). On a route that pseudonymizes:
@@ -184,7 +186,7 @@ One switch cannot do all three. A message can be marked to stay word for word (`
 - **The list.** The loop keeps the turn's passage list and saves it with a paused turn, so it survives a confirmation. Read on `main`, not run: the loop collects case-law sources across rounds today, and a paused turn's saved state does not yet hold them.
 - **The check.** When the turn ends, the reply's quotations are checked against that list by today's checker, unchanged, and enter the ledger as today.
 - **Follow-ups (R71, R72).** A tool result lives only inside its turn. So at the start of a turn, the passages the previous reply cited (verified citations only) are placed first in the new turn's list as [1] to [k]. They are sent in today's "retrieved context" block, word for word, as a system message of their own (API R75). Ruled 13 November (API R80, amending R72): the block's header loses the citing rule and keeps its label, so the rule appears once, as the prompt part plus the reminders; and passages are carried only when the turn's agent can search knowledge. The turn's record lists the carried passages by count and source ids, with the reply they came from and no text (audit 17). Searches in the turn continue from [k+1]. Only the previous reply's passages are carried, not the whole chat's. The cost is more tokens on every follow-up turn, and document text is again in a system message.
-- **When.** Built in Stage 1, with or straight after slice 1i, before agents are announced (R64). Until it merges, the default agent's file says `knowledge: none` and keeps today's server fetch. A security-path slice, larger since R71 and R72; not sized.
+- **When.** Built in Stage 1, straight after slice 1i-2, before agents are announced (R64). Until it merges, the default agent's file says `knowledge: none` and keeps today's server fetch. Three security-path slices, 1q-1 to 1q-3: 5 days on the build plan's estimate (annex I).
 
 The gap was found by reading the code, not by running it.
 
@@ -224,10 +226,10 @@ Who can read the record (review ruling V6, API R65). In Stage 1, only someone wi
 Limits:
 
 - The gateway writes one routing-log row per round, so an agent turn has several.
-- Slices 1f-3, 1h and 1i each write their part of the record for turns that run straight through. A turn that pauses for a tool confirmation or a connector sign-in, and the resumed turn, get their agent record in slices 1l-1 and 1l-2, at seven sites. A paused turn stores its frozen agent reference with its saved state, and the resumed turn runs on that version even if the chat's agent has changed since. The saved state also carries the agent's instructions, so the turn finishes even if that version is retired or deleted meanwhile (API R68). Agents are not announced as usable until all of these slices are on `main` (B1), so an announced turn that completes, pauses, fails part-way or is refused has its record. One more case was ruled on 13 November (V14): a turn that succeeds while its audit write fails. Today such a turn keeps its reply and has no audit row (a probe on `main`, on the streamed path with the loop replaced by a stub; annex H). On an agent turn the reply and the audit row become one write. If the record cannot be written, the reply is not saved and the user gets an error, even though a streamed answer may already have been shown. Chat with agents off stays as today, so there a successful turn can still lack its audit row; that ends when the old chat path is removed (ADR R26). Part of the failed-turn slice; not sized.
+- Slices 1f-3, 1h and 1i-2 each write their part of the record for turns that run straight through. A turn that pauses for a tool confirmation or a connector sign-in, and the resumed turn, get their agent record in slices 1l-1 and 1l-2, at seven sites. A paused turn stores its frozen agent reference with its saved state, and the resumed turn runs on that version even if the chat's agent has changed since. The saved state also carries the agent's instructions, so the turn finishes even if that version is retired or deleted meanwhile (API R68). Agents are not announced as usable until all of these slices are on `main` (B1), so an announced turn that completes, pauses, fails part-way or is refused has its record. One more case was ruled on 13 November (V14): a turn that succeeds while its audit write fails. Today such a turn keeps its reply and has no audit row (a probe on `main`, on the streamed path with the loop replaced by a stub; annex H). On an agent turn the reply and the audit row become one write. If the record cannot be written, the reply is not saved and the user gets an error, even though a streamed answer may already have been shown. Chat with agents off stays as today, so there a successful turn can still lack its audit row; that ends when the old chat path is removed (ADR R26). This is slice 1s-2 (annex I).
 - **Admin re-runs.** Audit ruling 13 says an admin re-run's audit row names the blocked turn's agent and says the re-run did not run as that agent, and that the re-run's own reply carries no agent pointer. Ruled 13 November (API R30): in Stage 1 the admin re-run is not wired to agent refusals. A refused agent turn saves no message and no reply row, so there is nothing to re-run, and no Stage 1 slice changes the override handler. Audit ruling 13 applies once something writes a refusal row. By search of `main`, not run: nothing writes a refusal reply row today, so the re-run may not be reachable at all. That is to be confirmed on a running stack and filed as its own issue. Ruled 13 November (API R81): the admin re-run is removed with the old chat path. An admin who wants a refused turn run changes the route or the matter's floor, and the user resends. The ADR states it as a capability removed at the trigger.
 - **Refusals.** A refused agent turn writes an audit row of its own in slice 1g-2 (audit ruling 11): the agent's id, version and fingerprint, the item refused and the reason code. The action is `agent.turn_refused` (API R45). The ruling adds "and later the 'run without' choice". Audit rows are not edited. Ruled 13 November (V21): two rows, neither edited. The refusal row records the refusal; the resent turn's own record lists what it ran without; a refusal the user abandons leaves the refusal row alone. The reply row's pointer and the audit row must agree.
-- **Failed turns (API R69, which lifted a hold on R54).** Run on 13 November on a clean copy of `main`, with the loop replaced by a stub (annex H). Today, when the loop fails on the non-streaming path, only the user's message is left: no reply row and no audit row. On the streamed path a reply row with the error and an audit row are written. Ruled: both paths save a reply row with the error and write the turn's record, together or not at all, and the loop hands back what it had done when it failed (rounds completed, tools called). A new security-path slice in Stage 1, not sized. Not run: a real loop failing after real tool calls. The review of 13 November had read the streamed path's audit write as best-effort; the run showed the row is written when the loop fails. Ruled 13 November (API R74): a paused turn that runs out ends as a failed turn in the same way.
+- **Failed turns (API R69, which lifted a hold on R54).** Run on 13 November on a clean copy of `main`, with the loop replaced by a stub (annex H). Today, when the loop fails on the non-streaming path, only the user's message is left: no reply row and no audit row. On the streamed path a reply row with the error and an audit row are written. Ruled: both paths save a reply row with the error and write the turn's record, together or not at all, and the loop hands back what it had done when it failed (rounds completed, tools called). Two security-path slices in Stage 1, 1s-1 and 1s-2: 3.5 days on the build plan's estimate (annex I). Not run: a real loop failing after real tool calls. The review of 13 November had read the streamed path's audit write as best-effort; the run showed the row is written when the loop fails. Ruled 13 November (API R74): a paused turn that runs out ends as a failed turn in the same way.
 - **Closed connections (API R66).** Today, on the streamed path, a client that disconnects cancels the loop and nothing is saved (the same run; the non-streaming path was not run). Ruled: the loop runs protected from the connection closing. A closed stream is noted, the round in flight finishes, no further round starts, and the reply and record are saved as stopped. A tool call is never cut half-way. Part of slice 1o, for every tool turn, agents on or off.
 - Tool-call rows and the gateway's routing log are not marked with the agent. They join through the message id. `load_skill` and `search_knowledge` each write one tool-call row (tier 0, digest only); results are recorded as outcome and counts. Their rows carry the provider name `lq-ai`, meaning a tool LQ.AI itself runs (API R45).
 - The server holds the chat's agent: a pointer on the chat row to one saved version, not a copy. Every record site uses the id, version and fingerprint frozen at the start of the turn. An agent can be set, swapped or removed between turns, so one chat can hold turns from several agents and from none. With agents on, clearing a chat's agent returns it to the default agent. Ruled 13 November (audit 14, API R84): only the server's own change is an audit event. When a chat's agent is retired or deleted and the chat falls back to the default agent, the server writes a `chat.agent_reassigned` row in the same write, at the next turn's start: the chat id; from (agent id, version, name); to (`default`); the reason (`agent_retired` or `agent_deleted`); no user as actor. A user's own change is not an event; each turn's record names its agent.
@@ -326,7 +328,7 @@ Opened from a matter whose minimum is tier 3, `smart` would read "Not available:
 | 3a **[S]** | `tools: none` and the selectors in A2, applied at all three places chat assembles tools, including after a resume | 250 |
 | 3b **[S]** | For non-admins: the list of connectors, including those with no sign-in, and each connector's tools. Smaller than drafted: endpoints for research sources, research capabilities and connector sign-in already exist for ordinary users | 120 |
 | 3c | Tools slot with real choices; connectors in the 2e panel; "Needs you: connect" | 350 |
-| 3d | To re-scope: agent turns are bounded by rounds and spend from Stage 1 (API ruling R23). What remains is the file's own lower limit, carried through a pause; `limits.max_tool_calls`, whose name is not ruled. The build plan puts the file's lower number in slice 1p as well, so little is left here; not re-sized. Today the cap is compared after a whole round, so a round with several calls can overshoot | 180 |
+| 3d | To re-scope: agent turns are bounded by rounds and spend from Stage 1 (API ruling R23). What remains is the file's own lower limit, carried through a pause; `limits.max_tool_calls`, whose name is not ruled. The build plan puts the file's lower number in slice 1p-2 as well, so little is left here; not re-sized. Today the cap is compared after a whole round, so a round with several calls can overshoot | 180 |
 
 Slice 3e, streaming the last round of a loop turn, moved to Stage 1 as its last slice (B3). Today every round is a non-streaming call and the final text is sent to the browser in one piece (`api/app/chat/tool_loop.py:1080`; `api/app/api/chats.py:3698`).
 
@@ -343,7 +345,7 @@ Slice 3e, streaming the last round of a loop turn, moved to Stage 1 as its last 
 | H1a **[S]** | Gateway: cover the results of a named tool, and restore its arguments, without doing the same to every tool on the request (B4) | 200 |
 | H1b **[S]** | `search_history`: a chat tool over this chat's messages outside the window, for the chat's owner; `history: chat` in the file and the check; a tool-call row and an audit row for every search, with counts only | 250 |
 
-**Needs to merge.** Stage 1. The ADR that PRD entry DE-409 already requires for the rule in H1a; a committee item (E). **Not before mid-August 2027** under ordering A. It needs only Stage 1, so the maintainer may pull it forward at Stage 2's expense.
+**Needs to merge.** Stage 1. The ADR that PRD entry DE-409 already requires for the rule in H1a; a committee item (E). **Not before late October 2027** under ordering A. It needs only Stage 1, so the maintainer may pull it forward at Stage 2's expense.
 
 **Exit test.** With pseudonymization switched on (the stock example has it off), in a chat longer than the window: the agent is asked about something said early on. It calls `search_history` and quotes the message. A gateway test shows the tool result left the deployment pseudonymized. All three conditions hold before the tool ships: the per-tool cover rule, that test, and the two rows per search. Until then `history` stays a reserved field.
 
@@ -439,9 +441,10 @@ A sub-agent with a connector comes later still (DE-409). The earlier guess of 7 
 - **Build and demonstrate on a branch:** waits for nothing.
 - **Merge Stage 1:** waits for one ADR, "Agent files in chat". About two pages. Covers Stages 1 to 3 and, since 13 November, the replacement of ordinary chat, its trigger, the removal of the old chat path and the New harness freeze (decisions 11, 14 and 15 below). Whether "about two pages" and 22 November still hold was not put to the maintainer (open question 42). Bundled with nothing. Numbered when its pull request opens: 0043 and 0044 are Accepted on `main`; #804 claims 0045. Ruled 12 November: the plan and the one page give the title only. The ADR takes the next free number when its pull request opens, probably 0046. The earlier "Agents in chat" draft is marked superseded where it sits and is never filed. Ruled 12 November: one new ADR whose header says it amends ADR 0007 (new request fields, section order, protected headings, required inputs no longer enforced), sits beside ADRs 0035 and 0038, and reverses direction 2 of 7 October (New harness as the base). It cites 0038 as Proposed.
 
-**Can the ADR be tabled on 15 November? No.** This design adds five decisions (5 to 9 below) to the six kept from draft 3, and they are gateway and security-path decisions. Only about two working days fall before the 15 November call, and Slice 0 takes them. So:
+**Can the ADR be tabled on 15 November? No.** This design adds five decisions (5 to 9 below) to the six kept from draft 3, and they are gateway and security-path decisions. Only about two working days fell before the 15 November call, and Slice 0 took them. So, as planned on 13 November:
 
-- **15 November call:** Slice 0 is shown and this design is presented for direction. Nothing is tabled for agreement. Ruled 13 November (API R57): the design is not shown until Slice 0 has run through the gateway; if it is not ready by Sunday, the item moves to 22 November with the ADR. Ruled 12 November: one page goes with it, carrying the turn shape, the decisions as headings, the aim, and four questions for the committee: the aim, agents as the product, the user-readable prompt and the `plan` tool. ADR ruling R13 named three; R17 added the second. A draft is at `discussions/2026-11-15-one-page-draft.md`. Ruled 13 November (ADR R34): the orchestrator rewrites it after the fold of that day; the draft there predates the rulings on the replacement, the trigger and the freeze.
+- **15 November call:** Slice 0 is shown and this design is presented for direction. Nothing is tabled for agreement. Ruled 13 November (API R57): the design is not shown until Slice 0 has run through the gateway; if it is not ready by Sunday, the item moves to 22 November with the ADR. Ruled 12 November: one page goes with it, carrying the turn shape, the decisions as headings, the aim, and four questions for the committee: the aim, agents as the product, the user-readable prompt and the `plan` tool. ADR ruling R13 named three; R17 added the second. A draft is at `discussions/2026-11-15-one-page-draft.md`. Ruled 13 November (ADR R34): the orchestrator rewrites it after the fold of that day; the draft there predates the rulings on the replacement, the trigger and the freeze. Slice 0 has since run (annex I).
+  - **What happened on 15 November,** from the call's draft minutes, which are not yet approved or published. The agent file, a turn-by-turn record of the model loading a skill, a draft builder screen and the default agent's behaviour in chat were shown, from the terminal. Nothing was tabled, and no vote was taken. The call confirmed an order: the first stage of the new interface is finalised first, and the agent work is built on top of it. The Labs area is reorganised alongside the interface, under an ADR of its own. The reason given for agents was that Labs needs them flexible enough to host members' experiments. Settled by the maintainer on 16 November: that order is an order of merging, not of building. The agent slices are written now, on branches, and the interface's first stage merges before the agent work does.
 - **22 November call:** the ADR, about two pages, is tabled.
 
 **Timing.** ADRs here have been dated Accepted on the day of the call that agreed them (0022 on 26 July, 0035 on 20 September, 0043 and 0044 on 18 October; all Sundays). Members who miss a call may object on the posted minutes within seven days; silence is assent. Assuming minutes are posted on the call day:
@@ -453,7 +456,7 @@ A sub-agent with a connector comes later still (DE-409). The earlier guess of 7 
 
 Each day the minutes are late moves the cautious date by a day. The 8 November minutes were still unposted on 10 November. The week's delay moves no date in the plan.
 
-**If the ADR is not agreed at the first attempt.** Work continues on the branch. Slice 0 and later branch work are shown at calls. No slice numbered 1 merges to `main` (the private fixes and slice 0a do not wait for the ADR), no setting appears in a release, and nobody outside a developer machine uses an agent. The next calls are 29 November and 6 December. If the ADR is amended, the file format and the section order are the parts most likely to change; slices 1d, 1a-1 and 1a-2 are redone. If it is rejected, the branch is kept as evidence and the plan returns to the maintainer.
+**If the ADR is not agreed at the first attempt.** Work continues on the branch. Slice 0 and later branch work are shown at calls. No slice numbered 1 merges to `main`, and nor does slice 0b (the private fixes and slice 0a do not wait for the ADR; whether slice 1t-1, which is test data, may merge before it is open question 46), no setting appears in a release, and nobody outside a developer machine uses an agent. The next calls are 29 November and 6 December. If the ADR is amended, the file format and the section order are the parts most likely to change; slices 1d, 1a-1 and 1a-2 are redone. If it is rejected, the branch is kept as evidence and the plan returns to the maintainer.
 
 **The ADR must decide:**
 
@@ -479,7 +482,7 @@ Decisions 1 to 4, 10 and 11 follow the 8 November direction, which is in draft m
 
 **Where the two trigger tests stand.** The API discussion's report of 13 November: read on `main`, not run. It is a report, not a ruling.
 
-- *Visibility (ADR 0038 D2).* An agent turn is a turn on the same send path. So it keeps the reply row's applied-skills, tier, provider, model, token and cost fields, the chat and message ids on routing-log rows, tool-call rows, audit rows and traces. Gaps: the query embedding's routing-log row is unlinked until slice 1i (API R83); whether the receipts call shows an owner the new fields of an agent turn's record was not read, and that reading is outside Stage 1 (API R65); a refused turn leaves an audit row and no reply. Not checked: traces across tool-loop rounds.
+- *Visibility (ADR 0038 D2).* An agent turn is a turn on the same send path. So it keeps the reply row's applied-skills, tier, provider, model, token and cost fields, the chat and message ids on routing-log rows, tool-call rows, audit rows and traces. Gaps: the query embedding's routing-log row is unlinked until slice 1i-1 (API R83); whether the receipts call shows an owner the new fields of an agent turn's record was not read, and that reading is outside Stage 1 (API R65); a refused turn leaves an audit row and no reply. Not checked: traces across tool-loop rounds.
 - *Pricing (ADR 0035 D6, "Refuse unknown paid-provider pricing").* Ordinary chat today runs unpriced routes and records no cost. Stage 1 refuses an unpriced paid route only when a spend limit is set (API R82). With none set, the turn still runs. So D6 is applied where a budget exists and not otherwise. Whether that meets the test is the ADR's to say.
 - *Receipts.* Answered twice on 13 November and not reconciled: a slice before the trigger (ADR R31), and "rule after the API reports" (V26). Open question 40.
 
@@ -491,9 +494,9 @@ Decisions 1 to 4, 10 and 11 follow the 8 November direction, which is in draft m
   2. *How the citation contract survives.* The citing rule is in the system prompt and, as a one-line reminder, in each result (API R62, R63). The reminder is an instruction inside a data message. Ruled 13 November (ADR R33): it is allowed because it is fixed, format-only and measured (annex B4).
   3. *Whether the anonymization skip changes.* Ruled 13 November (V16): the posture is unchanged and the mechanism is stated. Knowledge passages still reach the provider word for word, as Decision M2-1 requires for citation checking. On agent turns that is because chat tool results are not pseudonymized, not because of the skip flag. The flag still covers carried passages and attached files.
   4. *Ordering against replayed history.* Ruled 13 November (V17): left open. The ADR says point 4 is not answered and stays with DE-388. This narrows review ruling V2, which said the ADR answers DE-388's listed points.
-  5. *What evaluation result counts as fixed.* Ruled 13 November (V18): the ADR does not claim "fixed". The bar to merge: on the corpus, a model follows an instruction planted in a knowledge passage no more often as a tool result than as today's system message, on `local` and one cloud model. The numbers are published in `docs/security/`.
+  5. *What evaluation result counts as fixed.* Ruled 13 November (V18): the ADR does not claim "fixed". The bar to merge: on the corpus, a model follows an instruction planted in a knowledge passage no more often as a tool result than as today's system message, on `local` and one cloud model. The numbers are published in `docs/security/`. Ruled 15 November: the bar is read on control-adjusted rates. Within each arm, the rate on the planted cases less the rate on their controls is taken first, where a control exists, and those figures are compared across arms. Every reply to the "change the conclusion" cases and their controls is labelled by hand, because a string rule cannot tell an adoption from a rebuttal. The "dressed as a heading" cases are reported outside the pooled figure. Which cloud model, how many repeats and who labels are not ruled (open question 45).
 
-  The evaluation runs before slices 1f-2 and 1i merge, as ruled. What it has to cover shrank with the scope. Ruled 13 November (V19): its corpus is a small set of planted-instruction cases for knowledge passages only, built in a new Stage 1 slice, kept with the tests and offered to DE-110 later; it does not wait for DE-110's pattern library. The evaluation runs with and without the citing reminder (ADR R33).
+  The evaluation runs before slices 1f-2 and 1i-2 merge, as ruled. The corpus is written (slice 1t-1): 37 cases in eight kinds, in `tests/injection/knowledge/`. It has no runner, and the evaluation has not been run. What it has to cover shrank with the scope. Ruled 13 November (V19): its corpus is a small set of planted-instruction cases for knowledge passages only, built in a new Stage 1 slice, kept with the tests and offered to DE-110 later; it does not wait for DE-110's pattern library. The evaluation runs with and without the citing reminder (ADR R33).
 - **PRD entry DE-409** already requires an ADR for what is pseudonymized in tool arguments and results. The history tool's cover rule (slice H1a) waits for that ADR.
 - **ADR 0015, D1:** the chat loop's tool allowlist gains two built-in tools, `load_skill` and `search_knowledge`, switched on by the operator's agents setting.
 - **ADR 0018** (the citation ledger): unchanged. It applies to agent turns: citations are carried through `search_knowledge`, and today's checker and ledger are used as they are (API R50, R63). How the citation contract survives relocation is point 2 in the DE-388 line above.
@@ -558,7 +561,7 @@ A builder cannot build a New-harness-style plan-then-execute run under this plan
 |---|---|
 | Scope grew with each draft, up to replacing chat | It grew here too. Draft 4 was a builder beside chat. Since 12 November the default agent replaces ordinary chat on an install with agents on (API R20), and since 13 November the ADR decides the replacement itself, with a trigger one release after Stage 1 (ADR R21, R25, R26). Cuts are listed |
 | Many decisions, some reversed within days | One ADR for Stages 1 to 3, which since 13 November also decides the replacement, the trigger and the freeze; the other committee items are listed in E |
-| Documents, no running code after mid-October | Slice 0 runs before the ADR is tabled; the trial runs before the sub-agents ADR |
+| Documents, no running code after mid-October | Slice 0 ran before the ADR is tabled; the trial runs before the sub-agents ADR |
 | Each layer rested on something unratified | Stage 1 rests on one ADR, which itself follows draft minutes. Also unsettled: the shell, D8b |
 | Work ran in series through one person | Still true for Stage 1. The trial and L1 can go to a volunteer from December |
 | Names and numbers changed meaning | Slice 0, Stages 1 to 4, H1 and two named tracks; the ADR takes its number when opened. Draft 4 relettered Stage 1's slices; draft 3's letters are retired |
@@ -581,31 +584,32 @@ A builder cannot build a New-harness-style plan-then-execute run under this plan
   - Local models and tools: `gateway/app/providers/ollama.py:501-511` (tools passed), `:566, 633-651` (tool calls returned).
   - Workspace and New harness: ADR 0035 D8b (`docs/adr/0035-governed-orchestration-run-tree.md:122-133`); `api/app/skills/workspace.py`; `api/app/config.py:557`; `api/app/autonomous/orchestration/new_harness.py:96-99`.
 - **Other code opened:** `api/app/schemas/chats.py`; `api/app/chat/tool_schemas.py:244-330`; `api/app/mcp/service.py:136` (connector tools ask for confirmation by default); `api/app/autonomous/orchestration/profiles.py:305-316`; the gateway's model listing and four provider adapters. Other code facts are reported from private notes.
+- **Run, not read (Slice 0):** the runs in annex I, "Slice 0", made between 13 and 16 November through the API and the gateway on a throwaway stack, with `gemma4:e4b` on a local Ollama and `glm-5.2:cloud` through Ollama's cloud. The stack is not kept; the run records are in the maintainer's private working folder. The five written slices were each tested with the project's test suites on a clean copy of their branch.
 - **Run, not read (two probes):**
   - `research/2026-11-12-local-tool-probe.txt`: `gemma4:26b` and `gemma4:e4b` called `load_skill` when a skill was needed and not otherwise, three runs each, direct to Ollama and not through the gateway.
   - `research/2026-11-13-failed-turn-probe.txt`: what the send handler writes when the loop fails, when the audit write fails and when the client disconnects. Run by the API discussion on a clean copy of `main` at db379f26f, with a throwaway Postgres. The loop was replaced by a stub; no gateway, no model. Not covered: a disconnect on the non-streaming path, a real loop failing after real tool calls, the single-shot path with no tools.
 - **Issues and pull requests:** #563, #599, #662, #725, #726, #794–#799, #802, #804, #815.
-- **Committee:** published minutes to 1 November 2026; draft minutes of 8 November, not yet published.
+- **Committee:** published minutes to 1 November 2026; the minutes of 8 November, approved for publication on 15 November; draft minutes of 15 November, not yet approved or published.
 - **Research and review:** six private maintainer notes, three reviews of draft 1 and two of draft 2. Not linked here. Paths in this plan that begin `discussions/`, `research/`, `reviews/` or `build-plan/` are in the maintainer's private working folder, not in this repository.
 
 ## I. Slots, stages, dates and this week
 
-Moved from the main plan on 12 November, when it was cut. Stage 1 was redone on 12 and 13 November by a separate build-plan session. Its slices, sizes, order and dates are that session's estimates; the eight rulings the maintainer made there are marked B1 to B8. Stages 2 to 4 are not re-sized. File paths, code facts and the survey of what else is moving are in `build-plan/build-plan.md`, which is outside this plan.
+Moved from the main plan on 12 November, when it was cut. Stage 1 was redone on 12 and 13 November by a separate build-plan session, and again on 16 November, after the first slices were written and the maintainer had ruled on them. Its slices, sizes, order and dates are that session's estimates; the twelve rulings the maintainer made there are marked B1 to B12. Stages 2 to 4 are not re-sized. File paths, code facts and the survey of what else is moving are in `build-plan/build-plan.md`, which is outside this plan.
 
 ### The seven slots
 
 | Slot | What a builder gets | Stage | Indicative date (ordering A) |
 |---|---|---|---|
-| Model and instructions | The agent asks for a model; the matter's tier still decides | 1 | late May 2027 |
-| Skills | A list the model loads from. All 17 built-in skills can be listed, and any of the user's own: missing inputs no longer refuse a skill | 1 | late May 2027 |
-| | The model supplies a skill's inputs as arguments when it loads (slice 2h, to re-scope) | 2 | early July 2027 |
-| Knowledge | A search tool over `matter`; or `none` | 1 | late May 2027 |
-| | Pick among the matter's knowledge bases; carry one of my own | 2 | early July 2027 |
-| Tools | "What chat offers here", written as `tools: chat` | 1 | late May 2027 |
-| | Narrow to none, research, authority sources or named connectors | 3 | late July 2027 |
-| History | A tool that finds earlier messages of this chat that no longer fit in the request | H1 | not before mid-August 2027 |
-| Workspace | Tools to list, read and write files the agent keeps for itself in a matter, across chats | 4 | early September 2027 |
-| Sub-agents | A `delegate` tool: hand a task to another agent | own track | mid-November 2027 at the earliest |
+| Model and instructions | The agent asks for a model; the matter's tier still decides | 1 | mid-August 2027 |
+| Skills | A list the model loads from. All 17 built-in skills can be listed, and any of the user's own: missing inputs no longer refuse a skill | 1 | mid-August 2027 |
+| | The model supplies a skill's inputs as arguments when it loads (slice 2h, to re-scope) | 2 | late September 2027 |
+| Knowledge | A search tool over `matter`; or `none` | 1 | mid-August 2027 |
+| | Pick among the matter's knowledge bases; carry one of my own | 2 | late September 2027 |
+| Tools | "What chat offers here", written as `tools: chat` | 1 | mid-August 2027 |
+| | Narrow to none, research, authority sources or named connectors | 3 | mid-October 2027 |
+| History | A tool that finds earlier messages of this chat that no longer fit in the request | H1 | not before late October 2027 |
+| Workspace | Tools to list, read and write files the agent keeps for itself in a matter, across chats | 4 | late November 2027 |
+| Sub-agents | A `delegate` tool: hand a task to another agent | own track | mid-February 2028 at the earliest |
 
 **Four words, kept apart.** *Knowledge* is documents you attach. *History* is this chat's earlier messages. *Workspace* is files the agent writes and reads back. *Longer-term memory* across matters has no design and no date.
 
@@ -620,8 +624,9 @@ One pull request is about 400 changed lines at most. **[S]** marks a security-pa
 | | |
 |---|---|
 | Goal | A person pastes or uploads a file and uses it in chat. The model picks its skill and searches the matter |
-| Effort | 31 slices, about 8,550 lines, 48 days, plus 2 days for Slice 0 and 2 of preparation. Draft 7 said 14 PRs, 4,100 lines and 21.5 days. The private fixes are in no figure |
-| Needs to merge | The three privately tracked fixes, first (B5). A fourth was put on the private track on 13 November (V20); it is not sized, and whether B5 covers it is not ruled. The ADR ([annex E](#e-governance-path)), for every slice numbered 1 and for 3e. For the screens, the shell cutover (PR #815) on `main` (B2). A minor release: 1e is a migration, and 1b and 1r change every chat |
+| Effort | 43 slices, about 12,400 lines, 70.75 days, plus 2 days for Slice 0 and 2 of preparation. Draft 18 said 31 slices, 8,550 lines and 48 days. Draft 7 said 14 PRs, 4,100 lines and 21.5 days. The private fixes are in no figure |
+| Needs to merge | The three privately tracked fixes, first (B5). A fourth was put on the private track on 13 November (V20); it is not sized, and whether B5 covers it is not ruled. The ADR ([annex E](#e-governance-path)), for every slice numbered 1, for 0b and for 3e. For the screens, the shell cutover (PR #815) on `main` (B2). The first stage of the new interface, which merges before the agent slices; 0a and 1t-1 do not wait for it (settled 16 November). A minor release: 1e is a migration, and 1b and 1r change every chat |
+| State on 16 November | Slice 0 has run. Slices 0a, 0b, 1a-1, 1d and 1t-1 are written on branches and reviewed. None is merged and none has a pull request |
 
 **Ruled for the build, 12 November.** B1 to B8, in the maintainer's words in `build-plan/rulings.md`.
 
@@ -634,114 +639,199 @@ One pull request is about 400 changed lines at most. **[S]** marks a security-pa
 - **B7.** Ordering A: builder first.
 - **B8.** One migration, in slice 1e. It also carries the Stage 2 scratch-chat flag.
 
-**The slices below are a build-plan session's estimates, not rulings.** No code was written or run for them.
+**Ruled 15 and 16 November, after the first slices were written.** The maintainer's words are in his private working folder; B9 to B12 are in `build-plan/rulings.md`.
 
-- **Lines.** Each slice starts from Draft 7's figure for its parent, spread across the split. Work the rulings added is sized from the call sites read on `legalquants/main`.
+- **0b waits for the ADR.** It changes no behaviour, and it still does not merge before the ADR is accepted. This settles open question 20.
+- **The spend limit counts every model call a turn causes,** embeddings and citation-judge calls included. Four rulings of 16 November say how:
+  - **B9.** The citation judges run after the reply's last round. They are counted and never stopped. So only the chat model's rounds and the embeddings can reach the limit, and a turn's total may pass the limit by the judges' cost. Declined: holding back an estimate of the judges' cost before each round, and skipping the judges at the limit.
+  - **B10.** The treatment job, which runs in the background after the turn has ended, is left out of the count. Its cost is recorded against the message.
+  - **B11.** The cost stored on a reply stays the chat model's (API R29). The turn's record lists the embedding and judge costs by kind beside it, and the limit reads the sum.
+  - **B12.** With a spend limit set, an unpriced embedding or judge route is a refusal item, like an unpriced chat route (API R82).
+- **No rate entry means unpriced, local or not.** An operator gives a local model a zero rate to have its cost recorded. This replaces "local models count as priced at zero" in API R82.
+- **A repository agent file must carry `version`** ([annex A5](#a5-to-settle-in-slice-1d)).
+- **The DE-388 evaluation compares control-adjusted rates** and labels one kind of case by hand ([annex E](#e-governance-path)).
+- **The field that marks a chat turn is named `lq_ai_chat_turn`** (slice 1a-1).
+- **Slice 0 counts as done.** It ran on a local model and on one cloud model.
+- **The first slices stay on branches** until the maintainer opens their pull requests.
+
+**The slices below are a build-plan session's estimates, not rulings.** They were cut on 12 November, re-cut on 13 November and changed again on 16 November. Five are now written. Their figures here are still the estimates.
+
+- **Lines.** A slice that kept its scope keeps its 12 November figure, which started from Draft 7's figure for its parent. A slice that grew, and each new slice, is sized from the call sites read on `legalquants/main`.
 - **Days.** Draft 7's rates, which nobody has tested: a security-path slice takes one day per 160 lines, to the nearest half day and at least one day; any other backend slice, 1 day; an interface slice, 1.75 days.
-- **In no figure:** the private fixes, rebases, review of contributor slices, committee and release work, and the redesign itself.
+- **One named extra.** Slice 1t-2 carries half a day the rate cannot hold: reading replies to label them by hand.
+- **In no figure:** the private fixes, rebases, review of contributor slices, committee and release work, the redesign itself, running the exit test, and a combined test run of branches that touch the same request.
 - **Web slices** rest on a survey of the redesign that a sub-agent made by reading. Nothing was built or merged to check it.
 
-**Slice 0 is not 0a or 0b.** Slice 0 is this week's throwaway branch and never merges. 0a and 0b are real slices that merge to `main`.
+**What was built, against the estimate.** Source lines only; tests are several times the source on every branch, and the estimates do not count them.
 
-**On `main` before the ADR**
+| Slice | Source lines built | Estimate |
+|---|---|---|
+| 0a | 222 | 250 |
+| 0b | 352 added, 136 removed | 200 |
+| 1a-1 | 399, and 136 of documents | 400 |
+| 1d | 1,132, before the `version` ruling's change | 360 |
+| 1t-1 | not counted | 300 |
+
+Two of these branches passed their tests alone and failed together; both causes were fixed on their own branches. No estimate here is changed by what was built.
+
+**Slice 0 is not 0a or 0b.** Slice 0 was a throwaway branch and never merges. 0a and 0b are real slices that merge to `main`.
+
+**Before the ADR**
 
 | Slice | What | Lines | Days | Needs |
 |---|---|---|---|---|
-| 0a **[S]** | The token-and-cost sum (API R29, audit 5). The loop adds up each round's tokens and cost. The totals go on the reply row for every tool-loop turn. A paused turn carries its running totals | 250 | 1.5 | nothing |
-| 0b | The loop hands control back after each round. No behaviour changes. Progress events, stop, the limits and `load_skill` all need it. Whether it may merge before the ADR is asked, not ruled | 200 | 1 | 0a |
+| 0a **[S]** | The token-and-cost sum (API R29, audit 5). The loop adds up each round's tokens and cost. The totals go on the reply row for every tool-loop turn. A paused turn carries its running totals. On the every-chat list, and merges when ready (V25). Ruled 15 November: a round with no rate entry is unpriced, local or not, and a turn with an unpriced round stores no cost. The totals are the chat model's calls only, and stay so (B11) | 250 | 1.5 | nothing |
 
 **Gateway, after the ADR**
 
 | Slice | What | Lines | Days | Needs |
 |---|---|---|---|---|
-| 1a-1 **[S]** | Assembly runs for a chat request with no skill. The `lq_ai_assembled` object on the response and on each stream chunk, filled with today's parts. A field by which the chat send path marks a chat turn: other callers use the same endpoint, and the LQ.AI prompt must not reach them. Ruled 13 November (API R32): a new field, separate from the purpose tag; its name is not ruled. Fingerprints are over saved text: a skill's is over the skill as saved, not as rendered (API R67). Since 13 November: assembly no longer joins other system messages under the operator heading, so document text goes as a system message of its own (API R75); the Organization Profile is a part of kind `organization_profile` (V22) | 300 | 2 | the ADR |
-| 1a-2 **[S]** | The agent section: a field for the agent's instructions and one for where the server loaded it from; the label; the section order; headings that inputs cannot forge. The gateway reports a fingerprint of the instructions it was sent, as `agent_instructions_sent_fingerprint` (API R67, V22) | 250 | 1.5 | 1a-1 |
+| 1a-1 **[S]** | Assembly runs for a chat request with no skill. A field by which the chat send path marks a chat turn, separate from the purpose tag: other callers use the same endpoint, and the LQ.AI prompt must not reach them (API R32). Ruled 15 November: it is named `lq_ai_chat_turn`. The `lq_ai_assembled` object is on a marked turn's successful response and on each stream chunk, not on errors or unmarked responses; one more field, `fingerprint_contract`, stays beside it. Fingerprints are over saved text: a skill's is over the skill as saved, not as rendered (API R67). Assembly no longer joins other system messages under the operator heading, so document text goes as a system message of its own (API R75), on marked chat turns only; tabular is unchanged. The upgrade notes say to upgrade the gateway with or before the API. The Organization Profile is a part of kind `organization_profile` (V22) | 400 | 2.5 | the ADR |
+| 1a-2 **[S]** | The agent section: a field for the agent's instructions and one for where the server loaded it from; the label, whose wording is approved in review (API R44); the section order; headings that inputs cannot forge. The gateway reports a fingerprint of the instructions it was sent, as `agent_instructions_sent_fingerprint` (API R67, V22) | 250 | 1.5 | 1a-1 |
 | 1b **[S]** | The LQ.AI system prompt: a versioned file, its section for every chat, its part in `lq_ai_assembled`, and a call that returns its text to a signed-in user. Where the file lives is asked, not ruled | 200 | 1 | 1a-1; the maintainer's text |
 | 1c **[S]** | The skills list: a field of listed names, each rendered as name and description, and its part in `lq_ai_assembled`. `docs/api/gateway-openapi.yaml` | 200 | 1 | 1a-2 |
 | 1r **[S]** | The required-inputs check is removed everywhere (API R11) | 150 | 1 | the ADR (B6) |
 
-**Backend, after the ADR**
+**The agent store, after the ADR**
 
 | Slice | What | Lines | Days | Needs |
 |---|---|---|---|---|
-| 1d | File format v1: parser, validator, fingerprint; no `author` field (API R43; the slice was sized as if there were one); two example files; the default agent file, with no `model` line, no skills, `tools: chat`, named `lq-ai`, titled "LQ.AI", empty body. It ships with `knowledge: none` and changes to `[matter]` when the citations slice merges (API R52, R61, R64) | 380 | 1 | the ADR |
-| 1e | One migration (B8): the versions table; the chat's agent pointer; the reply's agent id and version; how a reply ended, one of seven values (API R79); the hidden-chat flag for Stage 2's tries, which must also be found by agent and user (API R73). `docs/db-schema.md`. Since 13 November also a retired state, the name kept after deletion, and the shipped default agents' texts (API R35, R55); not re-sized | 400 | 1 | 1d |
-| 1j | Agent endpoints: save from text, list (the default agent first, marked `is_default`; API R42), read, download, retire, delete. Deleting a version deletes the hidden try chats that ran it, and a version used only in tries can be deleted while its matter is open (API R78, V27) | 300 | 1 | 1d, 1e |
-| 1f-1 **[S]** | The agents setting. Chat create and chat update take an agent version; chat read returns the agent and whether a newer version exists (`newer_version`; API R42; none for the default agent, API R35). With agents on, none chosen means the default agent. The `docs/HONEST-STATE.md` line. When a chat's agent is retired or deleted, the fall-back to the default agent writes a `chat.agent_reassigned` audit row in the same write (audit 14, API R84). API R67 changes nothing here; it named this slice in error (an API note of 13 November) | 300 | 2 | 1e, 1j |
-| 1f-2 **[S]** | The send path. The chat's agent is read and frozen for the turn; the gateway fields are set; the request's model is optional and has no default on an agent turn (API R33); no knowledge fetch before the model on agent turns, except on the default agent until the citations slice merges (API R64); attached-file text stays a system message (API R70); the pointer on the reply row | 350 | 2 | 1f-1, 1a-2, 1c; the DE-388 evaluation |
-| 1f-3 **[S]** | The record for turns that run straight through. The audit row gains the agent's id, version and file fingerprint, from the store, and the gateway's parts for each round, among them the gateway's own fingerprint of the instructions it was sent (API R67). It carries the file's model beside the model that ran, and the LQ.AI prompt's version on every chat turn (API R47) | 200 | 1 | 1f-2, 1b |
-| 1g-1 **[S]** | The check, as one function: the file against the operator, the matter and the user, giving each item a state and a reason. A read-only call that returns those states for an agent in a matter: `POST /agents/{id}/versions/{n}/check`, with the same item list a 409 carries (API R48, which counts this call as new and unsized) | 300 | 2 | 1d |
-| 1g-2 **[S]** | The refusal. The check runs before the message is saved; a 409 lists the items; `run_without` on a resend; at most 16 skills; skills attached by hand in the same check and the same 409 (API R40); inline skill text refused only where the user chose the agent (API R34); `run_without` never names the model (API R53); one audit row per refusal, action `agent.turn_refused` (audit 11, API R45); with a spend limit set, an unpriced paid route is refused here, naming the model (API R82) | 300 | 2 | 1g-1, 1f-2 |
-| 1n | Progress events at the start and end of each step (API R39), names and counts only, on a streamed send and on a resumed turn. For every tool turn, agents on or off (API R36). Not re-sized | 250 | 1 | 0b |
-| 1p **[S]** | The two limits on agent turns: rounds, 20 by default, and an optional spend limit, both operator settings; the file may lower the rounds. One last round with tools off; the reply row and a progress event say which limit ended the turn | 250 | 1.5 | 0a, 0b, 1e, 1f-2 |
-| 1o **[S]** | Stop between rounds: a stop call; the loop checks at each round boundary; the reply is saved as stopped with what was gathered; the record says so, and whether the user or a closed connection stopped it (audit 16). Ruled 13 November (API R46): the stop call and a closed stream ship together in this slice, which starts by verifying what a closed stream does today. A probe on 13 November showed it on the streamed path, with the loop replaced by a stub: the loop is cancelled and nothing is saved (annex H). Ruled (API R66): the loop is protected from the connection closing; the round in flight finishes, and the reply and record are saved as stopped. A stopped reply always has text (API R37). For every tool turn (API R36). Not re-sized | 350 | 2 | 0b, 1e, 1n |
-| 1h **[S]** | `load_skill`: attaches a listed skill for the following rounds, brings its tools, writes a tool-call row, survives a pause with the frozen agent reference and the agent's instructions beside it (API R68). Uses the governed entry point; provider name `lq-ai` (API R45). Adds a gateway test for placeholder renumbering after a load (API R38) | 350 | 2 | 1c, 1f-2, 1g-2, 1p |
-| 1i **[S]** | `search_knowledge`: a chat tool over chat's own retrieval, with an audit row and a tool-call row for every search, empty ones included. On a pseudonymizing route the query goes as the model wrote it until H1. Results are numbered passages, each with a one-line reminder of the citing format (API R62, R63). The rest of citations is a slice of its own, with or straight after this one (API R64); not sized. Since 13 November the search's audit row names the embedding's provider and tier, or "keyword only", and the tool sends the turn's chat and message ids with the embeddings request for the gateway to write on its routing-log row: a gateway change (audit 15, API R83). Not re-sized | 300 | 2 | 1f-2; the DE-388 evaluation |
-| 1l-1 **[S]** | Records on turns that pause for a tool confirmation, and on their resumed turns. The paused turn's saved state carries the agent's instructions (API R68) | 220 | 1.5 | 1h, 1f-3 |
-| 1l-2 **[S]** | Records on turns that pause for a connector sign-in. The documentation, `docs/security/audit-logging.md` and `docs/compliance/`, with the admin re-run limit as reworded (audit 13). The change to the override handler has no slice yet | 200 | 1 | 1l-1 |
+| 1d | File format v1: parser, validator, fingerprint; no `author` field (API R43); two example files; the default agent file, with no `model` line, no skills, `tools: chat`, named `lq-ai`, titled "LQ.AI", empty body. It ships with `knowledge: none` and changes to `[matter]` when the citations slices merge (API R52, R61, R64). Ruled 15 November: a repository file must carry `version`, and that is the only difference between the validator's two modes; a byte-order mark and an `optional` later-stage item are refused ([annex A5](#a5-to-settle-in-slice-1d)) | 360 | 1 | the ADR |
+| 1e | One migration (B8): the versions table; the chat's agent pointer, "default" with no version (API R35); the reply's agent id and version; how a reply ended, one of seven values (API R79); the hidden-chat flag for Stage 2's tries, which must also be found by agent and user (API R73); a retired state and the name kept after deletion (API R55); the shipped default agents' texts, held by fingerprint (API R35). `docs/db-schema.md`. One slice, as B8 rules, though it passes 400 lines | 450 | 1 | 1d |
+| 1j-1 | Agent endpoints: save from text, list (the default agent first, marked `is_default`; API R42), read, download | 300 | 1 | 1d, 1e |
+| 1j-2 | Retire and delete. A version that ran in an open matter is retired, not deleted (API R55, V11); a try does not count (API R78, V27). Deleting a version deletes the hidden try chats that ran it; the name is kept (API R55, R78). At start, the running release's default file is written to the store by fingerprint if it is absent (API R35) | 350 | 1 | 1j-1 |
+
+**The chat's agent and the send path, after the ADR**
+
+| Slice | What | Lines | Days | Needs |
+|---|---|---|---|---|
+| 1f-1 **[S]** | The agents setting. Chat create and chat update take an agent version; chat read returns the agent and whether a newer version exists (`newer_version`; API R42; none for the default agent, API R35). With agents on, none chosen means the default agent. The `docs/HONEST-STATE.md` line. When a chat's agent is retired or deleted, the fall-back to the default agent writes a `chat.agent_reassigned` audit row in the same write, at the next turn's start (audit 14, API R84) | 380 | 2.5 | 1e, 1j-1 |
+| 1f-2 **[S]** | The send path. The chat's agent is read and frozen for the turn; the gateway fields are set; the request's model is optional and has no default on an agent turn (API R33; today it defaults to `smart`); no knowledge fetch before the model on agent turns, except on the default agent until the citations slices merge (API R64); attached-file text stays a system message (API R70); the pointer on the reply row | 350 | 2 | 1f-1, 1a-2, 1c. Merges after 1t-2 (V2) |
+| 1f-3 **[S]** | The record for turns that run straight through. The audit row gains the agent's id, version and file fingerprint, from the store, and the gateway's parts for each round, among them the gateway's own fingerprint of the instructions it was sent (API R67, V22). It carries the file's model beside the model that ran and whether the sender picked it, and the LQ.AI prompt's version on every chat turn, agents on or off (API R47) | 200 | 1 | 1f-2, 1b |
+
+**Search and the DE-388 evaluation**
+
+| Slice | What | Lines | Days | Needs |
+|---|---|---|---|---|
+| 1i-1 **[S]** | Gateway: the embeddings request carries the turn's chat and message ids, and the gateway writes them on its routing-log row. The API's client returns the embedding's provider and tier (audit 15, API R83). Since 16 November the response also carries the embedding's cost, which the gateway works out today for its routing log only | 150 | 1 | the ADR |
+| 1i-2 **[S]** | `search_knowledge`: a chat tool over chat's own retrieval, with an audit row and a tool-call row for every search, empty ones included. The audit row names the embedding's provider and tier, or "keyword only" (audit 15). On a pseudonymizing route the query goes as the model wrote it until H1. Results are numbered passages, each with a one-line reminder of the citing format (API R62, R63). It uses the governed entry point; provider name `lq-ai` (API R45) | 380 | 2.5 | 1f-2, 1i-1. Merges after 1t-2 (V2) |
+| 1t-1 | The DE-388 corpus: a small set of planted-instruction cases, knowledge passages only, kept with the tests and offered to DE-110 later (V19, ADR R40). Written: 37 cases in eight kinds, in `tests/injection/knowledge/`, with a loader and a scorer that make no model calls | 300 | 1 | nothing |
+| 1t-2 **[S]** | The DE-388 evaluation. On the corpus, on `local` and one cloud model, with and without the reminder: is a planted instruction followed more often as a tool result than as today's system message? Ruled 15 November: rates are control-adjusted within each arm before the arms are compared; every reply to the "change the conclusion" cases and their controls is labelled by hand; the "dressed as a heading" cases are reported outside the pooled figure. The numbers are published in `docs/security/` (V2, V18, ADR R33, R39). Which cloud model, how many repeats and who labels are not ruled (open question 45) | 310 | 2.5: 2 at the rate, and half a day of labelling | 1t-1; 1i-2's result format on a branch |
+
+**Citations on agent turns** (API R50, R62 to R64, R71, R72, R76, R80; audit 17)
+
+| Slice | What | Lines | Days | Needs |
+|---|---|---|---|---|
+| 1q-1 **[S]** | Gateway: the citing rule as a part of its own, kind `citing_rule`, with a version and a fingerprint, sent only when the turn offers `search_knowledge`. Its heading joins the set inputs cannot forge. Its place in the order is open question 39 | 180 | 1 | 1b |
+| 1q-2 **[S]** | The turn's passage list. Numbers run on across searches, and a repeat keeps its first number. The loop keeps the list as it keeps case-law sources today; it is saved with a paused turn, checked at the end by today's checker and entered in the ledger | 320 | 2 | 1i-2 |
+| 1q-3 **[S]** | Carried passages. The previous reply's verified cited passages are [1] to [k] of the new list, in the retrieved-context block as a system message of its own (API R75), its header without the rule (API R80), and only when the agent can search. The record lists them by count, source ids and the reply they came from. The default file changes to `knowledge: [matter]`, and 1f-2's fetch exception ends (API R64) | 300 | 2 | 1q-2, 1f-3 |
+
+**The check, after the ADR**
+
+| Slice | What | Lines | Days | Needs |
+|---|---|---|---|---|
+| 1g-1 **[S]** | The check, as one function: the file against the operator, the matter and the user, giving each item a state and a reason. A read-only call that returns those states for an agent in a matter: `POST /agents/{id}/versions/{n}/check`, with the same item list a 409 carries, each with `can_run_without` (API R48, R53). With a spend limit set, an unpriced paid route is an item that names the model (API R82); no rate entry means unpriced, local or not. The embedding and judge routes are checked the same way (B12). Whether the call covers the default agent, whose pointer has no version, is open question 47 | 380 | 2.5 | 1d, 1j-1, 1p-2 |
+| 1g-2 **[S]** | The refusal. The check runs before the message is saved; a 409 lists the items; `run_without` on a resend, never naming the model (API R53); at most 16 skills; skills attached by hand in the same check and the same 409 (API R40); inline skill text refused only where the user chose the agent (API R34); one audit row per refusal, action `agent.turn_refused` (audit 11, API R45); the resent turn's own record lists what it ran without (V21) | 400 | 2.5 | 1g-1, 1f-2 |
+
+**The loop, after the ADR**
+
+| Slice | What | Lines | Days | Needs |
+|---|---|---|---|---|
+| 0b | The loop hands control back after each round. No behaviour changes. Progress events, stop, the limits and `load_skill` all need it. Ruled 15 November: it waits for the ADR | 200 | 1 | 0a; the ADR |
+| 1n | Progress events at the start and end of each step: `round_started`, `tool_started`, `tool_finished`, `skill_loaded` (API R39). Names and counts only, on a streamed send and on a resumed turn. For every tool turn, agents on or off (API R36) | 300 | 1 | 0b |
+| 1p-1 **[S]** | The cost of every model call a turn causes (ruled 15 November). The citation-judge calls that run inside a turn hand back their tokens and cost; none does today. The embedding helper hands back the cost that 1i-1 puts on the wire. The loop's running total includes them, and the turn's record lists them by kind beside the chat model's total (B11). The judges are counted and not stopped (B9). The treatment job is left out (B10) | 330 | 2 | 0a, 1i-1 |
+| 1p-2 **[S]** | The two limits on agent turns (API R23): rounds, 20 by default, and an optional spend limit, both operator settings; the file may lower the rounds. One last round with tools off; the reply row and a progress event say which limit ended the turn. The spend limit reads 1p-1's total at each round boundary, so it stops a new round and never a judge (B9) | 250 | 1.5 | 0a, 0b, 1e, 1f-2, 1p-1 |
+| 1o **[S]** | Stop between rounds: a stop call; the loop checks at each round boundary; the reply is saved as stopped with what was gathered; the record says so, and whether the user or a closed connection stopped it (audit 16, API R79). Ruled 13 November (API R46): the stop call and a closed stream ship together in this slice, which starts by verifying what a closed stream does today. A probe on 13 November showed it on the streamed path, with the loop replaced by a stub: the loop is cancelled and nothing is saved (annex H). Ruled (API R66): the loop is protected from the connection closing; the round in flight finishes, and the reply and record are saved as stopped. A stopped reply always has text (API R37). For every tool turn (API R36). One slice, as R46 rules, though it passes 400 lines | 480 | 3 | 0b, 1e, 1n |
+
+**`load_skill`, after the ADR**
+
+| Slice | What | Lines | Days | Needs |
+|---|---|---|---|---|
+| 1h **[S]** | `load_skill`: attaches a listed skill for the following rounds, brings its tools, writes a tool-call row, survives a pause with the frozen agent reference and the agent's instructions beside it (API R68). Uses the governed entry point; provider name `lq-ai` (API R45). Adds a gateway test for placeholder renumbering after a load (API R38) | 400 | 2.5 | 1c, 1f-2, 1g-2, 1p-2 |
+
+**Records for paused and failed turns, after the ADR**
+
+| Slice | What | Lines | Days | Needs |
+|---|---|---|---|---|
+| 1l-1 **[S]** | Records on turns that pause for a tool confirmation, and on their resumed turns. The paused turn's saved state carries the agent's instructions (API R68) | 260 | 1.5 | 1h, 1f-3 |
+| 1l-2 **[S]** | Records on turns that pause for a connector sign-in. The documentation, `docs/security/audit-logging.md` and `docs/compliance/`, with the admin re-run limit as reworded (audit 13). No Stage 1 slice changes the override handler (API R30) | 200 | 1 | 1l-1 |
+| 1s-1 **[S]** | A turn that fails part-way leaves a reply row with the error and a record, written together or not at all, on both send paths and on a resumed turn (API R69). The loop hands back the rounds completed and the tools called. The reply ends as `failed` (API R79) | 320 | 2 | 1f-3, 1e |
+| 1s-2 **[S]** | On an agent turn a successful reply and its record are one write. If the record cannot be written, no reply is saved and the user sees an error (V14). A paused turn that runs out is closed as a failed turn (API R74, R79) | 250 | 1.5 | 1s-1, 1l-1 |
 
 **Screens, after the shell cutover is on `main` (B2)**
 
 | Slice | What | Lines | Days | Needs |
 |---|---|---|---|---|
-| 1k | The Agents page: list, paste, upload, View file, Download, Use in chat (starts a new chat set to that agent), labelled "experimental". The one way into editing an agent or copying one (interface ruling, 13 November); its "Edit" and "Make a copy" controls are not drawn yet (parked). A row in the sidebar; where it sits is asked, not ruled | 300 | 1.75 | 1j, 1f-1 |
-| 1m-1 | The agent pill in the message box: it opens a list and edits the chat. It only switches agents, with no edit or copy entry (interface ruling, 13 November). The default agent's screens (mockup boards 9 to 11). The model picker may send nothing when the user has not picked (API R33). On every agent chat it returns after each send, to the file's model or, on the default agent, the install's default: a picked model lasts one turn (interface ruling, 13 November) | 350 | 1.75 | 1f-1, 1j |
+| 1k | The Agents page: list, paste, upload, View file, Download, Use in chat (starts a new chat set to that agent), labelled "experimental". The one way into editing an agent or copying one (interface ruling, 13 November); its "Edit" and "Make a copy" controls are not drawn yet (parked). A row in the sidebar; where it sits is asked, not ruled | 300 | 1.75 | 1j-1, 1f-1 |
+| 1m-1 | The agent pill in the message box: it opens a list and edits the chat. It only switches agents, with no edit or copy entry (interface ruling, 13 November). The default agent's screens (mockup boards 9 to 11). The model picker may send nothing when the user has not picked (API R33). On every agent chat it returns after each send, to the file's model or, on the default agent, the install's default: a picked model lasts one turn (interface ruling, 13 November) | 380 | 1.75 | 1f-1, 1j-1 |
 | 1m-2 | A pill on every reply, and a line where the agent changes | 250 | 1.75 | 1f-2 |
-| 1m-3 | Live step lines; the "limit reached" and "stopped" marks; a Stop that waits for the round | 300 | 1.75 | 1n, 1o, 1p |
+| 1m-3 | Live step lines; the "limit reached" and "stopped" marks; a Stop that waits for the round | 300 | 1.75 | 1n, 1o, 1p-2 |
 | 1m-4 | The refusal notice, built from the 409's list, with "run this turn without it" | 250 | 1.75 | 1g-2 |
 | 1m-5 | The "newer version" line above the message box, with the control to move and a dismiss. Every saved version raises it (API R41); none for the default agent (API R35) | 200 | 1.75 | 1f-1 |
-| 1m-6 | Reasons and tiers on the agent's page; loaded skill names under each reply. Searches appear as live step lines while the turn runs (slice 1m-3) and are not kept under the reply in Stage 1 (review ruling V6, API R65) | 300 | 1.75 | 1g-1, 1h, 1i |
+| 1m-6 | Reasons and tiers on the agent's page; loaded skill names under each reply. Searches appear as live step lines while the turn runs (slice 1m-3) and are not kept under the reply in Stage 1 (review ruling V6, API R65) | 250 | 1.75 | 1g-1, 1h |
 | 1m-7 | The read screen: the LQ.AI prompt, the operator's instructions, the Organization Profile. What the operator row shows is asked, not ruled. Ruled 13 November (interface): reading the operator instructions and the Organization Profile is a Stage 1 slice of its own, with one read call (API R56), so it can be reviewed, and dropped, on its own. The maintainer confirmed the same day that this is that slice, and none is added (V15) | 300 | 1.75 | 1b |
+| 1m-8 | The web chat's input form once the inputs check is gone. Sized as: it warns and lets the send go. If open question 27 is answered the other way, this slice goes | 120 | 1.75 | 1r |
 
-**Last in Stage 1 (B3)**
+**Last in Stage 1 (B3, V9)**
 
 | Slice | What | Lines | Days | Needs |
 |---|---|---|---|---|
-| 3e **[S]** | The last round of a loop turn streams word by word. Not verified that this fits one PR. Ruled 13 November (API R59): every round is requested from the gateway as a stream. Text is passed to the browser as it arrives; if the round turns out to be tool calls, nothing was shown. The gateway's last chunk of each round carries that round's cost, so the sum and the spend limit stay right. A gateway change; to be re-sized | 300 | 2 | 0a, 0b, 1n |
+| 3e-1 **[S]** | Gateway: the last chunk of each streamed round carries that round's cost (API R59). Today the stream works out the cost for the routing log only | 150 | 1 | the ADR |
+| 3e-2 **[S]** | Every round is requested from the gateway as a stream. Tool-call pieces are gathered; text is passed to the browser as it arrives; if the round turns out to be tool calls, nothing was shown. The sum and the spend limit read the chunk's cost. Not verified that the gateway's streamed path returns tool calls for every adapter with tools on | 350 | 2 | 3e-1, 0a, 0b, 1n, 1p-2 |
 
-**Totals.** 31 slices, 8,550 lines, 48 days. By kind: 17 security-path slices, 27 days; 5 other backend slices, 5 days; 8 screens, 14 days; 3e, 2 days (marked security-path on 13 November; its days are unchanged). Without 3e: 30 slices, 8,250 lines, 46 days.
+**Totals.** 43 slices, 12,400 lines, 70.75 days. By kind, without 3e: 25 security-path slices, 45 days; 7 other backend slices, 7 days; 9 screens, 15.75 days. 3e: 2 slices, 500 lines, 3 days. Without 3e: 41 slices, 11,900 lines, 67.75 days.
 
-**48 days is a floor.** Four slices of 200 lines (1b, 1c, 1f-3 and 1l-2) fall exactly between 1 and 1.5 days at the rate above and are counted at 1; counting them at 1.5 adds 2 days. And the work below has no slice and no size.
+**70.75 days is a floor.** Four slices of 200 lines (1b, 1c, 1f-3 and 1l-2) fall exactly between 1 and 1.5 days at the rate above and are counted at 1; counting them at 1.5 adds 2 days.
 
-Ruled, not yet sliced:
+**What changed since Draft 18's 31 slices and 48 days.**
 
-- citations on agent turns: the passage list kept by the loop and saved with a paused turn, the check at the end, the citing rule as a prompt part, and the previous reply's cited passages carried into the next turn (API R50, R62 to R64, R71, R72, R76, R80). The carried block's header loses the rule, passages are carried only when the agent can search knowledge, and the record lists them by count and source ids (audit 17). A security-path slice, with or straight after slice 1i;
-- a reply and a record for a turn that fails part-way, written together (API R69): a security-path slice. The same slice makes a successful agent turn's reply and record one write (V14), and closes a paused turn that runs out as a failed turn (API R74);
-- protecting the loop from a closed connection, inside slice 1o (API R66);
-- carrying the agent's instructions in a paused turn's saved state, inside slices 1h and 1l-1 (API R68);
-- the adversarial evaluation that DE-388 requires, before slices 1f-2 and 1i merge (review ruling V2), and before it a new slice that builds its small corpus of planted-instruction cases (V19). The ADR discussion's guess for the corpus is two to three days; it is not an estimate;
-- a retired state for agents, the name kept after deletion, and the move to the default agent (API R49 and R55; review ruling V11);
-- keeping each shipped default agent's text in the store (API R35);
-- removing the old chat path, in the release that turns agents on for every install (ADR R25, R26). By the API discussion's report, read and not sized, it covers: the server-side knowledge fetch and its call (the block formatter stays, because carried passages use it); the agents-off branches of the send path, non-streaming and streamed, and the single-shot path with no tools; the cap of 8 tool calls and its setting; the agents setting and V14's exception; the admin re-run (API R81); and the tests and API documents for all of these. Its guess is 2 to 4 days, not an estimate. It is after Stage 1 and in no figure; its place in the order is open question 41;
-- the check as a call of its own, where it is more than slice 1g-1 already holds (API R48);
-- the web chat's input form once the inputs check is gone (open question 27);
-- the PRD, OpenAPI and audit-logging documents that go with each change, where a slice does not already name them;
-- the exit-test steps listed below.
+- **Split:** 1j into 1j-1 and 1j-2. 1i into 1i-1 and 1i-2. 1p into 1p-1 and 1p-2. 3e into 3e-1 and 3e-2.
+- **New:** the corpus and the evaluation (1t-1, 1t-2); citations (1q-1, 1q-2, 1q-3); failed turns (1s-1, 1s-2); the input form (1m-8).
+- **Grew in days:** 1a-1, 1f-1, 1g-1, 1g-2 and 1h by half a day each, and 1o by one.
+- **Grew in lines only:** 1e, 1n, 1l-1 and 1m-1. **Shrank:** 1d and 1m-6.
+- **Of the 22.75 days added:** citations 5; failed turns 3.5; the corpus and the evaluation 3.5; the split of 1i 1.5, of 1p 2 and of 3e 1; the input form 1.75; the split of 1j 1; growth in 1a-1, 1f-1, 1g-1, 1g-2 and 1h 0.5 each, and in 1o 1.
 
-Slices 1a-1, 1e, 1f-1, 1g-2, 1h, 1i, 1j, 1l-1, 1n and 1o also grew on 13 November and are not re-sized.
+API R64 guessed that citations add "about two days". The 5 here is larger because R71, R72, R76, R80 and audit 17 came after R64 and added the carried passages, the separate rule part and their record.
 
-Moved out of Stage 1 on 13 November: extending the receipts call so a chat's owner reads a turn's record (API R51, R65). Where it goes was answered twice later that day and is not reconciled: a slice after Stage 1 is announced and before the trigger (ADR R31), and "rule after the API reports" (V26). No slice or size is added here.
+**Ruled work with no slice of its own, and where it went:**
 
-**25 May is a merge date.** It is when the last Stage 1 slice merges to `main`, and when agents are announced as usable. No release is tied to it, and the roadmap's Candidate train (30 April) falls before it. An operator gets agents from the first release after it. Ruled 13 November (ADR R25, R26): that release ships agents off by default; the next minor release, the trigger, turns them on for every install unless a stated blocker is open, and removes the setting and the old chat path. Neither release has a date.
+- the check as a call of its own (API R48): inside slice 1g-1;
+- the retired state, the kept name and the move to the default agent (API R49, R55; review ruling V11): columns in 1e, endpoints in 1j-2, the fall-back in 1f-1;
+- each shipped default agent's text kept in the store (API R35): the column in 1e, the write in 1j-2;
+- protecting the loop from a closed connection (API R66): inside slice 1o;
+- the agent's instructions in a paused turn's saved state (API R68): inside slices 1h and 1l-1;
+- the PRD, OpenAPI and audit-logging documents that go with each change: inside the slice that makes the change;
+- the exit-test steps listed below: each is a test in the slice that makes it pass. Running the whole exit test is in no figure.
+
+**After Stage 1, and in no Stage 1 figure:**
+
+- extending the receipts call so a chat's owner reads a turn's record (API R51, R65). Where it goes was answered twice on 13 November and is not reconciled: a slice after Stage 1 is announced and before the trigger (ADR R31), and "rule after the API reports" (V26). The build-plan session's figure from its route positions only: about 3.25 days;
+- removing the old chat path, in the release that turns agents on for every install (ADR R25, R26). By the API discussion's report, read and not sized, it covers: the server-side knowledge fetch and its call (the block formatter stays, because carried passages use it); the agents-off branches of the send path, non-streaming and streamed, and the single-shot path with no tools; the cap of 8 tool calls and its setting; the agents setting and V14's exception; the admin re-run (API R81); and the tests and API documents for all of these. Its guess is 2 to 4 days, not an estimate. Its place in the order is open question 41.
+
+**12 August is a merge date.** It is when the last Stage 1 slice merges to `main`, and when agents are announced as usable. No release is tied to it, and the roadmap's Candidate train (30 April) falls more than three months before it. An operator gets agents from the first release after it. Ruled 13 November (ADR R25, R26): that release ships agents off by default; the next minor release, the trigger, turns them on for every install unless a stated blocker is open, and removes the setting and the old chat path. Neither release has a date.
 
 **The order.** One person builds this, so the order is one queue. Branch work waits for nothing; the gates are gates on merging.
 
 | Step | Slices | Merges when |
 |---|---|---|
-| 1 | Slice 0; the one page for 15 November; the ADR's pull request; the LQ.AI prompt's first text | never (Slice 0), or as documents |
-| 2 | The three private fixes; a fourth was added on 13 November | now, through the private channel (B5); whether B5 covers the fourth is not ruled |
-| 3 | 0a, 0b | now for 0a; 0b is asked, not ruled |
+| 1 | Slice 0; the one page for 15 November; the ADR's pull request; the LQ.AI prompt's first text | never (Slice 0, which has run), or as documents |
+| 2 | The three private fixes; a fourth was added on 13 November | first (B5); whether B5 covers the fourth is not ruled |
+| 3 | 0a | when its pull request is opened (V25) |
 | 4 | 1a-1, 1a-2, 1b, 1c, 1r | after the ADR |
-| 5 | 1d, 1e, 1j | after the ADR |
-| 6 | 1f-1, 1f-2, 1f-3 | after the ADR |
-| 7 | 1g-1, 1g-2 | after the ADR |
-| 8 | 1n, 1p, 1o | after the ADR |
-| 9 | 1h, 1i | after the ADR |
-| 10 | 1l-1, 1l-2 | after the ADR |
-| 11 | 1k, 1m-1 to 1m-7 | after PR #815 is on `main` (B2) |
-| 12 | 3e | after step 11 (B3). Agents are announced as usable here |
+| 5 | 1d, 1e, 1j-1, 1j-2 | after the ADR |
+| 6 | 1f-1, 1f-2, 1f-3 | 1f-1 after the ADR; 1f-2 and 1f-3 after step 7 |
+| 7 | 1i-1, 1i-2, 1t-1, 1t-2 | when 1t-2's numbers are published; then 1f-2 and 1i-2 merge (V2). Whether 1t-1, which is test data, may merge before the ADR is open question 46 |
+| 8 | 1q-1, 1q-2, 1q-3 | after step 7 |
+| 9 | 0b, 1n, 1p-1, 1p-2, 1o | after the ADR; 0b is written and merges first |
+| 10 | 1g-1, 1g-2 | after the ADR |
+| 11 | 1h | after the ADR |
+| 12 | 1l-1, 1l-2, 1s-1, 1s-2 | after the ADR |
+| 13 | 1k, 1m-1 to 1m-8 | after PR #815 is on `main` (B2) |
+| 14 | 3e-1, 3e-2 | after step 13 (B3). Agents are announced as usable here |
 
-**A contributor could take,** each on their own fork and each adding a maintainer review: 1j; 1n once 0b is on `main`; the stream half of 1m-3; 1k, 1m-2, 1m-5 and 1m-7 after the cutover, if someone can review interface slices (open question 3); L1 once 1d is on `main`. Not for a contributor: the 17 security-path slices, 3e, 0b, and 1m-1, which edits a message box the redesign will rebuild.
+**The written slices wait.** 0a, 0b, 1a-1, 1d and 1t-1 stay on branches until the maintainer opens their pull requests, and each is brought up to `main` and tested again first. 0b, 1a-1 and 1d also wait for the ADR, so each call the ADR slips is a week in which written work cannot merge. The agent work also merges after the first stage of the new interface (settled 16 November). That holds the agent slices only: 0a and 1t-1, which change no agent behaviour, do not wait for the interface.
+
+**A contributor could take,** each on their own fork and each adding a maintainer review: 1j-1 and 1j-2; 1n once 0b is on `main`; the stream half of 1m-3; 1k, 1m-2, 1m-5, 1m-7 and 1m-8 after the cutover, if someone can review interface slices (open question 3); L1 once 1d is on `main`. Not for a contributor: the 25 security-path slices, 3e, 0b, and 1m-1, which edits a message box the redesign will rebuild.
 
 **Exit test.** On the stock `gateway.yaml.example`: Ollama serving the `local` models; the Anthropic and OpenAI keys set (the stock example embeds knowledge through OpenAI); the agents setting on; an ordinary matter with the five sample NDAs in an attached knowledge base.
 
@@ -752,7 +842,7 @@ Moved out of Stage 1 on 13 November: extending the receipts call so a chat's own
 5. With one test connector installed (the stock example has none): load the skill, trigger a tool that asks for confirmation, and approve. The resumed turn still has the skill loaded, and its record has the same version.
 6. Setting off: setting an agent on a chat is refused, and chat gets its knowledge the old way and still streams. Setting on: a chat with no agent chosen runs the default agent, and its record names it.
 
-**Steps the rulings need, none written yet:** a turn that reaches the rounds limit; a turn that is stopped; a chat moved by the "newer version" line; step lines seen on a streamed turn; the read screen; an answer that arrives word by word (3e); a reply row whose cost is the sum of its rounds; a send through the API with no model, answered from `local` (API R33); the reply's quotations shown as verified citations that open on the source passage (API R50); with agents off, a matter with knowledge and a file attached: the response lists the LQ.AI part, and a quotation from a passage comes back exactly as written (API R36); a playbook run, a tabular extraction, a citation check and a prompt enhancement each show no LQ.AI part (API R32); a follow-up that quotes a passage the previous reply cited, with no new search (API R72); a turn whose model call fails part-way, leaving a reply row with the error and a record (API R69); a tab closed mid-turn, leaving a reply saved as stopped (API R66); an agent deleted while its turn is paused, and the turn still finishes (API R68); an agent turn whose audit write fails: no reply is saved and the user sees an error (V14); a pause left to run out, closed as a failed turn (API R74); with a spend limit set, a turn on an unpriced paid route refused at the check (API R82); a chat whose agent is deleted, with a `chat.agent_reassigned` row at its next turn (API R84); a search whose audit row names its embedding provider and tier (audit 15); a try in a matter, and its version then deleted while the matter is open (V27).
+**Steps the rulings need, none written yet:** a turn that reaches the rounds limit; a turn that is stopped; a chat moved by the "newer version" line; step lines seen on a streamed turn; the read screen; an answer that arrives word by word (3e-2); a reply row whose cost is the sum of its rounds; a turn whose record lists its embedding and judge costs beside that sum, and a spend limit reached on rounds and embeddings while the judges still run (B9, B11); with a spend limit set, a turn refused at the check for an unpriced embedding or judge route (B12); a send through the API with no model, answered from `local` (API R33); the reply's quotations shown as verified citations that open on the source passage (API R50); with agents off, a matter with knowledge and a file attached: the response lists the LQ.AI part, and a quotation from a passage comes back exactly as written (API R36); a playbook run, a tabular extraction, a citation check and a prompt enhancement each show no LQ.AI part (API R32); a follow-up that quotes a passage the previous reply cited, with no new search (API R72); a turn whose model call fails part-way, leaving a reply row with the error and a record (API R69); a tab closed mid-turn, leaving a reply saved as stopped (API R66); an agent deleted while its turn is paused, and the turn still finishes (API R68); an agent turn whose audit write fails: no reply is saved and the user sees an error (V14); a pause left to run out, closed as a failed turn (API R74); with a spend limit set, a turn on an unpriced paid route refused at the check (API R82); a chat whose agent is deleted, with a `chat.agent_reassigned` row at its next turn (API R84); a search whose audit row names its embedding provider and tier (audit 15); a try in a matter, and its version then deleted while the matter is open (V27).
 
 #### Stages 2 to 4, and the history tool
 
@@ -778,7 +868,7 @@ Slice tables and full exit tests: [annex C](#c-slices-for-stages-2-to-4-the-hist
 
 ### What we can show and when
 
-**Assumption, for the maintainer to correct:** 8 working days a month, about two a week, counted from 10 November 2026, with two weeks off at the year end. The roadmap's figure for all work is about 16 person-days a month; the shell redesign, Labs and the release trains compete for them. Each date below is the cumulative days at that rate. The sums are the build-plan session's (`build-plan/size.py`).
+**Assumption, for the maintainer to correct:** 8 working days a month, about two a week, counted from 10 November 2026, with two weeks off at each year end. The roadmap's figure for all work is about 16 person-days a month; the shell redesign, Labs and the release trains compete for them. Each date below is the cumulative days at that rate. The sums are the build-plan session's (`build-plan/size.py`).
 
 **Not in any date:** the three private fixes, which go first (B5), or the fourth, added on 13 November (V20). Every two days they take moves every later date by a week. **No slack is in any date:** each assumes every slice takes its estimate and merges when written.
 
@@ -788,41 +878,49 @@ Slice tables and full exit tests: [annex C](#c-slices-for-stages-2-to-4-the-hist
 | Preparation: the ADR, the one page, the LQ.AI prompt's first text | 2 | 4 | 22 November (the call) |
 | The private fixes | not sized | | |
 | 0a, 0b | 2.5 | 6.5 | 2 December |
-| Gateway: 1a-1, 1a-2, 1b, 1c, 1r | 6.5 | 13 | 8 January 2027 |
-| 1d, 1e, 1j | 3 | 16 | 19 January |
-| 1f-1, 1f-2, 1f-3 | 5 | 21 | 5 February |
-| 1g-1, 1g-2 | 4 | 25 | 19 February |
-| 1n, 1p, 1o | 4.5 | 29.5 | 7 March |
-| 1h, 1i | 4 | 33.5 | 21 March |
-| 1l-1, 1l-2 | 2.5 | 36 | 30 March |
-| The eight screens | 14 | 50 | 18 May: the last screen merges |
-| 3e | 2 | 52 | **25 May: Stage 1 ends; agents announced as usable** |
+| Gateway: 1a-1, 1a-2, 1b, 1c, 1r | 7 | 13.5 | 10 January 2027 |
+| The store: 1d, 1e, 1j-1, 1j-2 | 4 | 17.5 | 24 January |
+| The chat: 1f-1, 1f-2, 1f-3 | 5.5 | 23 | 12 February |
+| Search and DE-388: 1i-1, 1i-2, 1t-1, 1t-2 | 7 | 30 | 9 March |
+| Citations: 1q-1, 1q-2, 1q-3 | 5 | 35 | 26 March |
+| The loop: 1n, 1p-1, 1p-2, 1o | 7.5 | 42.5 | 21 April |
+| The check: 1g-1, 1g-2 | 5 | 47.5 | 9 May |
+| `load_skill`: 1h | 2.5 | 50 | 18 May |
+| Paused-turn records: 1l-1, 1l-2 | 2.5 | 52.5 | 26 May |
+| Failed turns: 1s-1, 1s-2 | 3.5 | 56 | 8 June: the backend ends |
+| The nine screens | 15.75 | 71.75 | 2 August: the last screen merges |
+| 3e-1, 3e-2 | 3 | 74.75 | **12 August 2027: Stage 1 ends; agents announced as usable** |
 
-The first two rows show the call dates; the rate itself gives 17 and 24 November. The one page sits in the second row but is due on the 15th.
+- The first two rows show the call dates; the rate itself gives 17 and 24 November. The one page sits in the second row but was due on the 15th.
+- **The rows are the order of writing, not of merging.** "0a, 0b" is one row because they are written together; 0b merges after the ADR.
+- **Six rows are the rate's dates, not what happened.** Slice 0 ran, and 0a, 0b, 1a-1, 1d and 1t-1 were written and reviewed, between 13 and 16 November: 9 days of work at the rate. The dates are not moved earlier for that. Written is not merged: each slice still needs its pull request and the maintainer's review, and three need the ADR. What the first batch waited on was review, the maintainer's decisions and the ADR, which the rate does not measure (open question 1).
+- **The half day of labelling in 1t-2** assumes 144 replies to read: four cases and their four controls, 3 arms, 2 models and 3 repeats. Each further repeat adds 48 (open question 45).
 
 The later stages are not re-sized, so these are floors on top of a Stage 1 that is itself a floor:
 
-| Work | Days | Cumulative | Draft 7 said | Now about |
-|---|---|---|---|---|
-| Stage 2 | 12.5 | 64.5 | early April 2027 | early July 2027 |
-| Stage 3, without 3e | 6 | 70.5 | early May | late July |
-| History tool H1 | 3.5 | 74 | mid-May | mid-August |
-| Stage 4 | 7 | 81 | mid-June | early September |
-| Contributed agents L1–L4 | 4 | 85 | late June | mid-September |
-| Sub-agents trial | 3 | 88 | early July | late September |
-| Sub-agents ADR and build | 14 or more | 102 | late August or September | mid-November 2027 at the earliest |
+| Work | Days | Cumulative | Draft 7 said | Draft 18 said | Now about |
+|---|---|---|---|---|---|
+| Stage 2 | 12.5 | 87.25 | early April 2027 | early July 2027 | late September 2027 |
+| Stage 3, without 3e | 6 | 93.25 | early May | late July | mid-October |
+| History tool H1 | 3.5 | 96.75 | mid-May | mid-August | late October |
+| Stage 4 | 7 | 103.75 | mid-June | early September | late November |
+| Contributed agents L1–L4 | 4 | 107.75 | late June | mid-September | early December |
+| Sub-agents trial | 3 | 110.75 | early July | late September | mid-December |
+| Sub-agents ADR and build | 14 or more | 124.75 | late August or September | mid-November 2027 at the earliest | mid-February 2028 at the earliest |
 
-A volunteer may still take L1 once 1d is on `main`, and the sub-agents trial once Slice 0 has run.
+If the receipts extension and the removal of the old chat path come between Stage 1 and Stage 2, each row above moves by about two to three weeks more. Neither has a ruled size (open questions 40 and 41).
 
-**What moved since Draft 7.** Stage 1's exit was late February; it is now three months later. Of the 26.5 added days: 10.5 are six more screens; 3.5 are stop and the two limits; 2.5 are 0a and 0b; 2 are 3e; 1 is progress events; 1 is the removal of the inputs check. The other 6 come from splitting 1a, 1f and 1g, whose line counts grew.
+A volunteer may still take L1 once 1d is on `main`, and the sub-agents trial now that Slice 0 has run.
 
-**Beside the roadmap.** Stage 1 now ends at about the same time as the roadmap's Candidate train (30 April 2027) and the earliest 1.0 tag (May 2027). At 8 days a month it takes half of the maintainer's observed days until late May, across three release trains. Open question 1.
+**What moved since Draft 7.** Stage 1's exit was late February 2027; it is now mid-August. Of the 49.25 days added, 26.5 came by 12 November: 10.5 were six more screens; 3.5 were stop and the two limits; 2.5 were 0a and 0b; 2 were 3e; 1 was progress events; 1 was the removal of the inputs check; and the other 6 came from splitting 1a, 1f and 1g, whose line counts grew. The 22.75 since are listed under the Stage 1 totals above.
+
+**Beside the roadmap.** Stage 1 now ends more than three months after the roadmap's Candidate train (30 April 2027) and after the earliest 1.0 tag (May 2027). At 8 days a month it takes half of the maintainer's observed days until mid-August, across three release trains. Open question 1.
 
 **Ordering.** Ruled 12 November (B7): A, builder first. A volunteer may still run the sub-agents trial earlier.
 
-**The ADR** can no longer be one page tabled on 15 November: it has five more decisions to make, and this week's two days go to Slice 0. Show Slice 0 and this design on 15 November, for direction; table the ADR, about two pages, on 22 November. Until it is agreed, no slice numbered 1 merges or ships. The private fixes and 0a merge before it. On this queue the first gateway slice is ready to merge in early December, so the ADR delays nothing unless it slips two calls. It covers Stages 1 to 3 and, since 13 November, the replacement of ordinary chat, the trigger and the freeze. Timing, contents and the separate committee items: [annex E](#e-governance-path).
+**The ADR** is about two pages, tabled on 22 November. On 15 November Slice 0 and this design were shown, for direction; nothing was tabled and no vote was taken ([annex E](#e-governance-path)). Until the ADR is agreed, no slice numbered 1 merges or ships, and nor does 0b; whether 1t-1, which is test data, may merge before it is open question 46. The private fixes and 0a do not wait for it. 0b, 1a-1 and 1d are already written, so a slipped call now holds written work. The ADR covers Stages 1 to 3 and, since 13 November, the replacement of ordinary chat, the trigger and the freeze. Timing, contents and the separate committee items: [annex E](#e-governance-path).
 
-**The shell.** The screens are due to start about the end of March 2027. PR #815, the cutover, is a draft at the end of a chain of open pull requests and waits for ADR 0045, which the committee is asked to finalise on 22 November (GitHub, 12 November, as the build-plan session read it). The redesign's later rebuild of the message box has no pull request, so the agent pill and the "newer version" line will be placed twice.
+**The shell.** The screens are due to start about 8 June 2027. PR #815, the cutover, is a draft at the end of a chain of open pull requests and waits for ADR 0045, which the committee is asked to finalise on 22 November (GitHub, 13 November, as the build-plan session read it). The redesign's later rebuild of the message box has no pull request, so the agent pill and the "newer version" line will be placed twice.
 
 ### Not in this plan
 
@@ -833,15 +931,15 @@ A file describing New harness. An operator-installed agents directory. Team shar
 | # | Risk | Response |
 |---|---|---|
 | 1 | The ADR slips a call, or minutes are posted late | Work continues on a branch; merge moves a week per slip |
-| 2 | A small local model does not call tools reliably, loads no skill, or loads the wrong one | Slice 0 runs on `gemma4:e4b` as the local model. A first probe is in `research/2026-11-12-local-tool-probe.txt`. The Ollama adapter passes tools and returns tool calls (read, not run). The record says what was loaded. After the trigger there is no server-side knowledge fetch to fall back on; whether that makes this risk a named blocker is not ruled (open question 43) |
+| 2 | A small local model does not call tools reliably, loads no skill, or loads the wrong one | Slice 0 ran on `gemma4:e4b` as the local model: it loaded the skill in 6 of 7 runs, and in the seventh said it had when it had not (see "Slice 0" below). A first probe is in `research/2026-11-12-local-tool-probe.txt`. The Ollama adapter passes tools and returns tool calls (read, not run). The record says what was loaded. After the trigger there is no server-side knowledge fetch to fall back on; whether that makes this risk a named blocker is not ruled (open question 43) |
 | 3 | On a pseudonymizing route the model writes its search query from pseudonymized text, so knowledge search is weaker there | Accepted for Stage 1. H1 builds the rule per tool (annex B4). Open question 6 |
 | 4 | A pasted file from a stranger now speaks from the system prompt | The label, the order, protected headings. The ADR says this is a label, not a guarantee. A pasted file's instructions can direct every tool the chat offers, and in Stage 1 a file cannot ask for fewer: `tools: none` arrives in Stage 3 |
-| 5 | A turn of several rounds is slow. Not measured | Slice 0 reports rounds and times. Progress events show each round as it ends. Slice 3e streams the last round |
+| 5 | A turn of several rounds is slow. Measured only in Slice 0 | In Slice 0 a two-round turn took about 6 to 14 seconds on the local model and about 4 on the cloud one, on two short NDAs. Progress events show each round as it ends. Slice 3e streams the last round |
 | 6 | Slice 2d carries a knowledge base into a chat under different matter terms | The ADR states the rule, or 2d leaves the ADR |
 | 7 | Sub-agents prove larger than guessed | The trial sizes the build before any ADR |
 | 8 | The example replies poorly: the model must search well by itself, and search returns top passages, not each NDA in full | Not verified. The exit test asserts only what the server controls |
 | 9 | The private fixes are first in the queue and not sized; a fourth joined them on 13 November | Every two days they take moves every later date by a week. Triage sizes them |
-| 10 | The shell cutover (PR #815) is not on `main` when the screens are due, about the end of March 2027 | The screens wait (B2). About four months of gateway and backend work come first |
+| 10 | The shell cutover (PR #815) is not on `main` when the screens are due, about 8 June 2027 | The screens wait (B2). About seven months of gateway and backend work come first |
 | 11 | The 22 November call carries five items: this ADR, ADR 0045, ADR 0016, the PRD section 1.3 change and the DE-211 revision | The one that slips takes a week |
 | 12 | A release is cut in the middle of Stage 1 with the agents setting half built | Open question 22 |
 
@@ -853,9 +951,10 @@ Smaller than the main plan's open questions.
 
 | Item | Owner |
 |---|---|
-| The name of the field that marks a chat turn, and the list of request builders that must set it: send, loop rounds, resume, re-run (API R32) | slice 1a-1 |
+| The list of request builders that must set the field that marks a chat turn (API R32). The field's name is ruled | slice 1a-1 |
 | The label's exact wording (API R44) | slice 1a-2, approved in review |
-| Annex A5, items (a) and (b) | slice 1d |
+| Folding the proposed text for slice 1d's twelve further choices into annex A | the maintainer |
+| The new wording of the DE-388 bar on control-adjusted rates, for the ADR | the maintainer |
 | The call for reading operator instructions and the Organization Profile (API R56) | the read-screen slice, 1m-7 |
 | Parked by the interface discussion on 13 November: screens not drawn (a reply with no pill; the builder's "save this skill first" notice; View file reading "deleted by its owner"); the Agents page's "Edit" and "Make a copy" controls; whether a stopped or failed reply keeps its step lines once saved; four mockup guesses not confirmed | the interface slices |
 | Handed to the interface discussion on 13 November while it is parked: earlier tries in "Try it" are a list of hidden chats, one turn each (API R73); screens that exist only for agents off stop at the trigger (ADR R26); a "changed since this turn" line where an old turn's record is shown (V23) | the interface slices |
@@ -863,34 +962,49 @@ Smaller than the main plan's open questions.
 | The private file's entry for the fourth privately tracked fix (V20) | the maintainer |
 | Where the citing rule sits in the system prompt's order: answered twice on 13 November, last (API R76) and straight after the LQ.AI prompt (ADR R29). Its heading joins the set inputs cannot forge either way | the maintainer (open question 39) |
 | Where the owner's reading of a turn's record through receipts goes: answered twice on 13 November, a slice before the trigger (ADR R31) and "rule after the API reports" (V26) | the maintainer (open question 40) |
-### This week: one task
+### Slice 0: run, 13 to 16 November
 
-**Slice 0.** On a throwaway branch. 2 days. Never merged as it is. No gateway change.
+**Slice 0.** On a throwaway branch. Sized at 2 days. Never merged. No gateway change.
 
-- **Includes:** a parser for the example file's fields (`schema`, `name`, `title`, `description`, `model`, `skills`, `knowledge`, `tools: chat`, and the body); `model` and `knowledge` are read and ignored. On send, the server builds one system message: the body, then each listed skill's name and description. It offers `load_skill` in the chat loop. When the model calls it, the server adds the skill to the request, and the gateway's existing assembly merges it on the next round. A developer switch hides all of it.
+- **Included:** a parser for the example file's fields (`schema`, `name`, `title`, `description`, `model`, `skills`, `knowledge`, `tools: chat`, and the body); `model` and `knowledge` are read and ignored. On send, the server builds one system message: the body, then each listed skill's name and description. It offers `load_skill` in the chat loop. When the model calls it, the server adds the skill to the request, and the gateway's existing assembly merges it on the next round. A developer switch hides all of it.
 - **Wrong on this branch, on purpose:** the parsed file is held in the browser and sent with the message; the design has the server hold the chat's agent. No LQ.AI prompt. Once a skill is loaded, the agent's text sits under the gateway's "Operator system instructions" heading: the wrong label, and the reason for slice 1a-2. Knowledge still arrives the old way. The limit is chat's 8 tool calls, not the rounds limit.
-- **Leaves out:** the table, records, the check, any screen beyond a paste box.
+- **Left out:** the table, records, the check, any screen beyond a paste box.
 - **Not usable** in a matter with real data.
 - **Done when:** with the `nda-comparer` example on `local`, served by `gemma4:e4b`, and two short NDAs pasted into the message, the model calls `load_skill("nda-snapshot")` and the final response's `lq_ai_applied_skills` names `nda-snapshot`. The gateway log cannot show this, and no log line is added for it. Asked something that needs no skill, it loads nothing. Repeat on one cloud alias with a test skill that sets no tier minimum. Then try `nda-snapshot` on `smart`: the gateway should refuse the round after the load, which is the mid-turn refusal slices 1g-1 and 1g-2 remove. Note the rounds and the time for each.
 
-Ruled 13 November (API R57): the design is not shown until Slice 0 has run through the gateway. If it is not ready by Sunday 15 November, the item moves to 22 November with the ADR. On 12 November the build-plan session found no branch for Slice 0 among this repository's branches and worktrees.
+**What it showed.** Every run went through the API and the gateway, on two invented NDAs and no real matter data.
+
+| Run | Model | Result |
+|---|---|---|
+| Load the skill | `gemma4:e4b`, local, tier 1 | 6 of 7: the model called `load_skill("nda-snapshot")` and the gateway merged the skill on the second round. In the other run the model made no tool call and wrote that it had loaded the skill |
+| A question that needs no skill | `gemma4:e4b` | 3 of 3: one round, no tool call, nothing loaded |
+| Load a test skill with no tier minimum | `glm-5.2:cloud`, through Ollama's cloud, rated tier 4 for the run | 3 of 3: loaded, and the answer followed the skill's text |
+| Load `nda-snapshot`, which needs tier 2 or stronger | `glm-5.2:cloud`, tier 4 | 2 of 2: the model called `load_skill`, and the gateway refused the next round. No reply was saved, and the first round's work was lost |
+| A question that needs no skill | `glm-5.2:cloud` | 2 of 2: nothing loaded |
+
+- **A small model can say it loaded a skill when it did not.** The record, not the reply, is what says which skill ran.
+- **A refusal part-way through a turn loses the turn.** That is the case slices 1g-1 and 1g-2 remove, by checking every listed skill before the first model call.
+- **Limits.** The plan was to try `nda-snapshot` on `smart`. No provider key was set, so that run was made on the cloud route instead. The cloud runs used one model through the gateway's Ollama adapter; the Anthropic and OpenAI adapters were not exercised. The tier of the cloud route was set by hand for the run. The agent file tells the model to load the skill, so the runs show a model following that instruction through the tool, not choosing a skill unprompted. Streaming and a resumed turn were not exercised. The answers' legal quality was not checked.
+
+Ruled 13 November (API R57): the design is not shown until Slice 0 has run through the gateway. Ruled 15 November: one cloud run was needed before Slice 0 counted as done. Ruled 16 November: with the cloud runs above, it is done.
 
 ### The first two weeks (10–24 November)
 
 Building first:
 
-- [ ] Slice 0.
+- [x] Slice 0. It ran between 13 and 16 November.
 - [ ] The one page for 15 November: the turn shape, the ADR's decisions as headings, the aim, and four questions for the committee (the aim, agents as the product, the user-readable prompt, the `plan` tool). A draft is at `discussions/2026-11-15-one-page-draft.md`.
 - [ ] Triage the private defects through the private channel, and fix them first, while the ADR is pending (B5).
-- [ ] Slice 0a, on `main` and independent of the ADR: sum tokens and cost over a tool-loop turn's rounds, paused and resumed turns included.
-- [ ] Slice 0b on a branch. Whether it may merge before the ADR is open question 20.
-- [ ] Turn Slice 0's parser into slice 1d; start slice 1a-1 on a branch.
+- [ ] Slice 0a, on `main` and independent of the ADR: sum tokens and cost over a tool-loop turn's rounds, paused and resumed turns included. Written on a branch; not on `main`.
+- [x] Slice 0b on a branch. Ruled 15 November: it waits for the ADR.
+- [x] Slice 1d and slice 1a-1 on branches. Both are written.
+- [x] Slice 1t-1, the DE-388 corpus, on a branch (added to this list on 16 November).
 - [ ] Confirm on a running stack whether the admin re-run can be reached today, then file an issue: fix or remove (API R30). Ruled 13 November (API R81): it is removed with the old chat path.
 - [ ] Draft the ADR "Agent files in chat". Open its pull request before 22 November.
 - [ ] Write the first text of the LQ.AI system prompt. It is short, and it is the maintainer's.
 - [ ] If "Agents" is to have a row in the redesigned sidebar, raise it in the ADR 0045 discussion before its comments close on 20 November (open question 21).
 
-This list is more than the four working days the plan's rate gives a fortnight, and it has 0a and 0b before 24 November where the dates table says 2 December. Read it as what comes first, not as a promise for the fortnight.
+This list is more than the four working days the plan's rate gives a fortnight, and it has 0a and 0b before 24 November where the dates table says 2 December. Read it as what comes first, not as a promise for the fortnight. The boxes ticked on 16 November are the ones this draft can vouch for; the others were not checked.
 
 Then housekeeping:
 
@@ -1122,6 +1236,23 @@ Applied:
 
 **Sixteenth fold, 13 November (draft 18): the scrub.** Lines that said where privately tracked fixes sit were removed or reworded, as ruled (ADR R16), and both files were committed to `docs/plans/`. The maintainer made the private backup copy outside the worktrees the same day, which closes ADR R16. He also ruled that the lines stating what `main` does today, its limits included, are committed as written (V30). No other ruling is added and none changes.
 
+**Seventeenth fold, 16 November (draft 19): the first slices, and Stage 1 re-cut.**
+
+- **What was built.** Slice 0 ran, on a local model and on one cloud model (annex I). Slices 0a, 0b, 1a-1, 1d and 1t-1 are written on branches and reviewed. None is merged. "Nothing in this plan is built" is gone from both status lines.
+- **Stage 1 re-cut.** 43 slices, about 12,400 lines and 70.75 days, where Draft 18 had 31 slices, 8,550 lines and 48 days. Its end moves from about 25 May to about 12 August 2027. The work Draft 18 listed as "ruled, not yet sliced" now has slices: citations (1q-1 to 1q-3), failed turns (1s-1, 1s-2), the corpus and the evaluation (1t-1, 1t-2) and the input form (1m-8). 1i, 1j, 1p and 3e are each split in two. These are the build-plan session's estimates. Every later date moves with them: the builder screen to late September 2027, sub-agents to mid-February 2028 at the earliest.
+- **Ruled 15 November, on what the first slices built.**
+  - Slice 0b waits for the ADR. Settles open question 20.
+  - The spend limit counts every model call a turn causes, embeddings and citation-judge calls included. Slice 1p is split so the costs are collected first.
+  - No rate entry means unpriced, local or not. This replaces "local models count as priced at zero" in API R82.
+  - The field that marks a chat turn is named `lq_ai_chat_turn`. `lq_ai_assembled` is on a marked turn's successful response and stream chunks only. The new layout of document text applies to marked chat turns only.
+  - A repository agent file must carry `version`. A byte-order mark and an `optional` later-stage item are refused. The hidden-character rule stays as built, with its limits stated (annex A5).
+  - The corpus stays in `tests/injection/knowledge/`. The evaluation's bar is read on control-adjusted rates, with hand labels for one kind of case (annex E).
+  - Slice 0 needed one cloud run before it counted as done.
+- **Ruled 16 November (B9 to B12).** The citation judges are counted in the spend limit and never stopped. The treatment job is left out. The cost stored on a reply stays the chat model's. An unpriced embedding or judge route is a refusal item. Slice 0 is done.
+- **The 15 November call,** from its draft minutes, not yet approved or published: Slice 0 and the design were shown for direction; nothing was tabled and no vote was taken; the interface's first stage comes before the agent work (annex E). Settled the next day: that is an order of merging, not of building, so the queue of writing does not change (question 51, raised and settled on 16 November).
+- **New open questions 45 to 50,** from the re-cut: the evaluation's inputs; whether the corpus may merge before the ADR; and four the build-plan session had raised on 13 November that the main plan did not yet list.
+- **Not folded:** the proposed annex A text for slice 1d's twelve further choices; the new wording of the DE-388 bar for the ADR.
+
 **Open questions settled.** Moved from the main plan, which keeps their numbers.
 
 - **2.** Settled 12 November (B7): ordering A, builder first.
@@ -1148,6 +1279,8 @@ Applied:
 - **35.** Settled 13 November (audit 15, API R83): the search's audit row names the embedding's provider and tier, and the embedding's routing-log row carries the turn's ids. The tool-call row stays tier 0.
 - **36.** Settled 13 November (ADR R24, R41): one list of every-chat changes in the ADR; all wait for it and ship when merged, except slice 0a, which merges when ready.
 - **28.** Settled 13 November (audit ruling 13): an admin re-run's record names the blocked turn's agent and says the re-run did not run as that agent. Its three follow-ups were answered by API R30 and R31: no Stage 1 slice changes the override handler; an agent refusal leaves no reply row, so the pointer question does not arise in Stage 1; a re-run has no agent.
+- **20.** Settled 15 November: no. Slice 0b changes no behaviour, and it still waits for the ADR. The build-plan session had recommended yes.
+- **51.** Raised on 16 November from the 15 November call's draft minutes, which put the new interface's first stage before the agent work: does the queue change? Settled the same day: "interface first, then harness" refers to merging, not building. Agent slices are still written first; the interface's first stage merges before they do. Slices 0a and 1t-1 are not agent slices and do not wait for it.
 
 ## K. Glossary
 
@@ -1176,7 +1309,7 @@ Applied:
 - **Old chat path.** Chat as built today, with agents off: knowledge fetched by the server before the model is asked, and no agent on the turn.
 - **Citing rule.** The instruction that tells the model how to cite a numbered passage. Today it sits in the header of the block of fetched passages.
 - **Carried passages.** The passages the previous reply cited, sent again at the start of the next turn so a follow-up can quote them without a new search.
-- **B1 to B8.** The maintainer's eight rulings in the build-plan session, listed in annex I.
+- **B1 to B12.** The maintainer's twelve rulings in the build-plan session, listed in annex I: B1 to B8 of 12 November and B9 to B12 of 16 November.
 - **Labs.** In this plan, the redesigned shell's Labs page only. Agents added to the repo by pull request are called contributed agents (slices L1 to L4); earlier drafts called that the Labs track.
 - **Admin.** A signed-in user with the admin role. Often the operator; in a firm, possibly someone else.
 
@@ -1250,7 +1383,7 @@ Each item ends by saying who decides it. Until 13 November this section was head
 5. **Each round is a full gateway request.** So every round passes the tier, pseudonymization and logging checks. The price is time, and one gateway log row per round. While a turn works, the stream carries a small event after each round (skill loaded, search run, tool called), with names and counts only, and the chat shows these as live step lines under the agent's pill. The answer itself arrives word by word from slice 3e, the last slice of Stage 1, and agents are not announced before it. *Decided by the ADR.*
 6. **The server holds a chat's agent.** The chat points at one saved version. Each turn freezes that version when it starts, so a change takes effect on the next turn, and a turn that pauses resumes on the version it started with. The chat stays on its version when the owner saves a newer one; the user moves it by editing the chat. An agent can be set, swapped or removed between turns, so one chat can hold turns from several agents and from none. Each turn's record names what ran it, and each reply row stores the agent id and version it ran on. *Decided by the ADR.*
 7. **A refused item stops the turn.** The notice names the item and offers "run this turn without it". It is tiresome, and deliberate: nothing is dropped silently. The check runs before the message is saved, so a refused send saves no message. It does write an audit row: the agent, the item refused and the reason. One exception to "nothing is dropped silently": a chat whose agent is retired or deleted moves to the default agent, with a line in the chat that says so. *Decided by the ADR.*
-8. **Stage 1 has one end.** Nobody is told agents are usable until everything ruled into Stage 1 is on `main`: the paused-turn records, the refusal notice and slice 3e included (ruled 12 and 13 November). The cost is time: about 25 May 2027 on the build plan's estimate. Whether an operator could turn the setting on from an earlier release is open question 22. *The maintainer's ruling on build order; not an ADR decision.*
+8. **Stage 1 has one end.** Nobody is told agents are usable until everything ruled into Stage 1 is on `main`: the paused-turn records, the refusal notice and slice 3e included (ruled 12 and 13 November). The cost is time: about 12 August 2027 on the build plan's estimate of 16 November. Whether an operator could turn the setting on from an earlier release is open question 22. *The maintainer's ruling on build order; not an ADR decision.*
 9. **Agents replace ordinary chat.** Ruled 13 November: the ADR decides this now, not only the aim. Stage 1 ships with agents off by default and labelled experimental, with a line in `docs/HONEST-STATE.md`. The setting is the operator's, for the whole install; it is not a per-person switch on the Labs page. With it on, every chat turn sent through the agent loop has an agent (admin re-runs, New harness runs and older replies have none): a chat with none chosen runs the default agent, a built-in agent file that can be read through View file like any other. The next minor release after Stage 1 turns agents on for every install, unless a stated blocker is open, and removes the setting and the old chat path together, so there is no switch back. Two tests from ADR 0038 must be shown met first: an agent turn is as visible as an ordinary turn, and the pricing rule of ADR 0035 is resolved for ordinary turns. The removal has no slice, size or date. *Decided by the ADR.*
 
 ### M2. How a turn is built: six passages
@@ -1258,7 +1391,7 @@ Each item ends by saying who decides it. Until 13 November this section was head
 - **Step 1.** **The chat has an agent.** It is set by editing the chat, not sent with the message. The message request carries the message, the model the sender picked and, on a resend after a refusal, a `run_without` list. With agents on, a chat with none chosen runs the default agent, and clearing a chat's agent returns it to the default. A chat on the default agent always runs the default file of the running release, and has no version to move to. On an agent turn the request's model is optional: absent means the file's model, or the install's default where the file names none. A picked model lasts one turn on every agent chat, the default agent's included.
 - **Step 4.** **Refuse or continue.** If a named item is not allowed, the turn is refused before any model call and no message is saved. The refusal lists each item with its state and reason, and writes an audit row that names the agent, its version and fingerprint, the item and the reason. To run without an item, the browser sends the same message again with a `run_without` list for this turn. The chat's agent is unchanged and the record shows the choice. `run_without` may name skills, knowledge bases and tools, never the model: a refused model is fixed by picking another.
 - **Step 5, part 3.** the agent's instructions, labelled by the server from where it loaded the agent: "built in to LQ.AI" for agents shipped in the repo, "written by a user of this deployment" for saved ones. Version 1 has no `author` field; a file may say who wrote it under `metadata`, and that is never the label;
-- **Step 8.** **The final answer.** The model answers without a tool call, or a limit is reached and one last round runs with tools off; the reply and a progress event say the limit was reached. An agent turn has two limits, and whichever comes first ends it: rounds (an operator setting, 20 by default; a load is an ordinary round; the file may lower the number, never raise it) and an optional spend limit per turn, in USD. If the user stops the turn, it ends at the next round boundary: the round in flight finishes, no further tool runs, and the reply is saved as stopped with what was gathered. With agents off, chat keeps its cap of 8 tool calls until the old chat path is removed. The spend limit is a threshold checked after each round, and only the rounds limit applies to local models. Where a spend limit is set, a turn on a paid route with no price configured is refused at the check. There is no count of tool calls within a round. A stopped reply always has text: a fixed line saying it was stopped and after how many rounds, then anything already written. Closing the tab or losing the connection stops the turn in the same way.
+- **Step 8.** **The final answer.** The model answers without a tool call, or a limit is reached and one last round runs with tools off; the reply and a progress event say the limit was reached. An agent turn has two limits, and whichever comes first ends it: rounds (an operator setting, 20 by default; a load is an ordinary round; the file may lower the number, never raise it) and an optional spend limit per turn, in USD. If the user stops the turn, it ends at the next round boundary: the round in flight finishes, no further tool runs, and the reply is saved as stopped with what was gathered. With agents off, chat keeps its cap of 8 tool calls until the old chat path is removed. The spend limit is a threshold checked after each round. It counts every model call the turn causes: the chat model's rounds, the embeddings and the citation judges (ruled 15 November). The judges run after the last round, so they are counted and never stopped, and a turn's total may pass the limit by their cost (ruled 16 November). On a local model only the rounds limit applies, because its cost is zero or unpriced. Where a spend limit is set, a turn on a paid route with no price configured is refused at the check, and so is one whose embedding or judge route has no price. There is no count of tool calls within a round. A stopped reply always has text: a fixed line saying it was stopped and after how many rounds, then anything already written. Closing the tab or losing the connection stops the turn in the same way.
 - **Step 9.** **The record** is written: agent id, version and fingerprint, as frozen in step 2; the skills offered and loaded; the tools offered and called. The gateway reports what it assembled on each round, in one `lq_ai_assembled` object (the LQ.AI prompt's version, a fingerprint for each part, each merged skill and its fingerprint), and the backend copies that into the record, round by round. The gateway keeps nothing of it; its routing log is unchanged. The record says what the gateway built, not what the backend asked for. Every fingerprint is over saved text a user can read. The agent has two: the file's, from the store, which View file shows; and the gateway's, over the instructions it was sent, kept under another name. `load_skill` and `search_knowledge` each also write a row in the existing tool-call log. Every chat turn's record carries the LQ.AI prompt's version and fingerprint, agents on or off. An agent turn's record carries the file's model and the model that ran.
 
 The reply row gains three things: the agent's id, its version, and how the reply ended, one of seven values that the record repeats. A refused turn has an audit row that names the agent. An admin re-run is not wired to agent refusals in Stage 1: a refused turn saves nothing to re-run. The admin re-run is removed with the old chat path. Agents are not announced as usable until all of these records are on `main`.
