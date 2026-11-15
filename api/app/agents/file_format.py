@@ -11,8 +11,9 @@ The two modes differ only in ``version`` (annex A3 point 17):
 * ``store`` is for a file a person pastes or uploads. ``version`` is ignored
   with a notice and its lines are left out of the saved text, because the
   store numbers versions itself.
-* ``repo`` is for files kept in the repository, which have no store. A
-  ``version`` there is kept and must be a whole number.
+* ``repo`` is for files kept in the repository, which have no store. Such a
+  file must carry ``version``, as a whole number of 1 or more. It is kept in
+  the saved text.
 
 Every problem names a field and says what is wrong in plain words. Problems
 in the fields are all collected. A file that cannot be read as YAML gets one
@@ -24,9 +25,15 @@ changed comment is a changed fingerprint.
 
 YAML is read with PyYAML's safe loader, as the skill loader does. Things the
 safe loader allows that are refused here: duplicate keys (it keeps the last
-one silently), anchors and aliases, merge keys, numbers written other than
-as plain digits where a number is asked for, and control or format
-characters.
+one silently), anchors and aliases, merge keys, and numbers written other
+than as plain digits where a number is asked for.
+
+Some characters are refused anywhere in the file, the body included:
+control characters other than tab and newline, and a named list of
+characters that hide or reorder text (see ``_hiding_character_name``). The
+raw line and paragraph separators U+2028 and U+2029 are refused in the front
+matter only. Other characters that are not shown on screen, such as
+variation selectors, are not refused.
 """
 
 from __future__ import annotations
@@ -616,6 +623,12 @@ class _Validator:
                 saved_text = self._without_version(lines, text)
             else:
                 version = self._repo_version(data["version"])
+        elif self.mode == "repo":
+            self.problem(
+                "version",
+                "`version` is missing. A file kept in the repository states its version "
+                "as a whole number, for example `version: 1`.",
+            )
 
         agent_fields = self._check_fields(data)
         if self.problems:

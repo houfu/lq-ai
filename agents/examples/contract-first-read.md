@@ -1,5 +1,6 @@
 ---
 schema: 1
+version: 1
 name: contract-first-read
 description: >
   Gives a first read of one commercial contract the user attaches:

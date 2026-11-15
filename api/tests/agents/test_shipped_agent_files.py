@@ -1,7 +1,7 @@
 """The agent files shipped in the repository's ``agents/`` folder.
 
-Every shipped file must parse and validate in ``repo`` mode, and the
-fingerprints are pinned so a change to a shipped file is a visible change
+Every shipped file must parse and validate in ``repo`` mode, so each one
+carries ``version``, and the fingerprints are pinned so a change to a shipped file is a visible change
 to this test.
 """
 
@@ -18,10 +18,10 @@ DEFAULT_AGENT = AGENTS_DIR / "lq-ai.md"
 EXAMPLES_DIR = AGENTS_DIR / "examples"
 
 PINNED_FINGERPRINTS = {
-    "lq-ai.md": "b1d1aa5b561f0fe0f0e2da632cd9827317f0948a559a16e7e3de28516b6f6ee6",
-    "examples/nda-comparer.md": "745f4d4b48f0eacdcf55220641992eb6a46435c3b0ef891ec4fece368b4b41a6",
+    "lq-ai.md": "b5ad5acc2e18c6db7f56e76a7c649af5577a9887dd16435271e05ab63eb68bad",
+    "examples/nda-comparer.md": "e665d5bdbbbfbe8bf56ba477d47a9c535263bdd5e4284973d8470f63ff9e4445",
     "examples/contract-first-read.md": (
-        "18b170328272024893920ad084b78f96fab7a058224739d92eeebc264d978d31"
+        "5eada9e744cd4a5dfeab46c17561367a6ae145d23cf2b05d8852ce9c34d8a0bf"
     ),
 }
 
@@ -50,13 +50,27 @@ def test_every_shipped_file_validates_in_repo_mode(path: Path) -> None:
 
 
 @pytest.mark.parametrize("path", shipped_files(), ids=lambda p: p.name)
-def test_every_shipped_file_has_the_same_saved_text_in_both_modes(path: Path) -> None:
+def test_every_shipped_file_carries_a_version(path: Path) -> None:
+    agent = parse_agent_file(read(path), mode="repo")
+    assert isinstance(agent.version, int)
+    assert agent.version >= 1
+    assert f"\nversion: {agent.version}\n" in agent.text
+
+
+@pytest.mark.parametrize("path", shipped_files(), ids=lambda p: p.name)
+def test_every_shipped_file_pasted_differs_only_in_version(path: Path) -> None:
+    # Pasted, a shipped file saves without its `version` line, with one notice.
+    # Every other field reads the same in both modes.
     store = validate_agent_file(read(path), mode="store")
     repo = validate_agent_file(read(path), mode="repo")
     assert store.agent is not None and repo.agent is not None
-    assert store.notices == ()
-    assert store.agent.text == repo.agent.text
-    assert store.agent.fingerprint == repo.agent.fingerprint
+    assert [n.field for n in store.notices] == ["version"]
+    version_line = f"version: {repo.agent.version}\n"
+    assert store.agent.text == repo.agent.text.replace(version_line, "", 1)
+    assert store.agent.version is None
+    assert store.agent.model_dump(exclude={"version", "text", "fingerprint"}) == (
+        repo.agent.model_dump(exclude={"version", "text", "fingerprint"})
+    )
 
 
 @pytest.mark.parametrize(("relative", "expected"), sorted(PINNED_FINGERPRINTS.items()))
@@ -77,10 +91,9 @@ def test_default_agent_matches_the_rulings() -> None:
     assert agent.skills == ()
     assert agent.tools == "chat"
     assert agent.knowledge == "none"
-    assert agent.version is None
+    assert agent.version == 1
     assert agent.instructions == ""
     assert "model:" not in agent.text
-    assert "version:" not in agent.text
 
 
 def test_nda_comparer_is_the_plans_example() -> None:
@@ -96,7 +109,7 @@ def test_nda_comparer_is_the_plans_example() -> None:
 
 def test_second_example_exercises_other_fields() -> None:
     agent = parse_agent_file(read(EXAMPLES_DIR / "contract-first-read.md"), mode="repo")
-    assert agent.version is None
+    assert agent.version == 1
     assert agent.title == agent.name
     # The listed skills need tier 2 or stronger; `local` is tier 1 on the
     # stock configuration, so the example runs as shipped.

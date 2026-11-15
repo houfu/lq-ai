@@ -207,9 +207,11 @@ def test_malformed_model_is_refused(model: str) -> None:
 def test_model_rules_are_the_same_in_both_modes(mode: AgentFileMode) -> None:
     # Annex A1's "contributed files use aliases only" is for the check on
     # contributed agents, not for either mode here.
-    accepted(with_line("model: anthropic/claude-x"), mode=mode)
-    accepted(with_line("model: local"), mode=mode)
-    assert "model" in refused(with_line("model: 'two words'"), mode=mode)
+    # A repository file must carry `version`; a pasted one need not.
+    version = "version: 1\n" if mode == "repo" else ""
+    accepted(with_line(version + "model: anthropic/claude-x"), mode=mode)
+    accepted(with_line(version + "model: local"), mode=mode)
+    assert set(refused(with_line(version + "model: 'two words'"), mode=mode)) == {"model"}
 
 
 def test_model_length_cap() -> None:
@@ -518,10 +520,34 @@ def test_repo_mode_refuses_a_bad_version(value: str) -> None:
     assert "whole number" in refused(with_line(f"version: {value}"), mode="repo")["version"]
 
 
-def test_repo_mode_version_is_optional() -> None:
-    result = accepted(file_text(), mode="repo")
+def test_repo_mode_refuses_a_file_without_version() -> None:
+    result = check(file_text(), mode="repo")
+    assert result.agent is None
+    assert [p.field for p in result.problems] == ["version"]
+    message = result.problems[0].message
+    assert "`version` is missing" in message
+    assert "`version: 1`" in message
+
+
+def test_repo_mode_reports_a_missing_version_with_the_other_problems() -> None:
+    problems = refused(file_text("schema: 1\nname: Bad Name\ntools: chat\n"), mode="repo")
+    assert {"version", "name", "description"} <= set(problems)
+
+
+@pytest.mark.parametrize("value", ["1", "2", "40"])
+def test_repo_mode_accepts_a_whole_number_version(value: str) -> None:
+    result = accepted(with_line(f"version: {value}"), mode="repo")
+    assert result.agent is not None
+    assert result.agent.version == int(value)
+    assert result.notices == ()
+
+
+def test_store_mode_saves_a_file_without_version() -> None:
+    result = accepted(file_text(), mode="store")
     assert result.agent is not None
     assert result.agent.version is None
+    assert result.notices == ()
+    assert result.agent.text == file_text()
 
 
 # --- body --------------------------------------------------------------------
@@ -839,7 +865,9 @@ def test_title_must_be_one_line() -> None:
 
 
 def test_model_must_be_printable_ascii() -> None:
-    message = refused(with_line("model: \uff4c\uff4f\uff43\uff41\uff4c"), mode="repo")["model"]
+    problems = refused(with_line("version: 1\nmodel: \uff4c\uff4f\uff43\uff41\uff4c"), mode="repo")
+    assert set(problems) == {"model"}
+    message = problems["model"]
     assert "plain letters, digits and punctuation" in message
 
 
@@ -863,9 +891,16 @@ def test_rounds_limit_has_no_upper_bound_at_save() -> None:
 
 # --- messages a person can act on (review 1, findings 6 and 7) ---------------
 
+
+def repo_version(mode: AgentFileMode) -> str:
+    """A repository file must carry `version`, so the corpus adds it in that
+    mode: each entry is refused for its own fault, not for a missing version."""
+    return "version: 1\n" if mode == "repo" else ""
+
+
 REFUSE_CORPUS: list[tuple[str, AgentFileMode]] = (
     [
-        (file_text(MINIMAL.replace(old, new)), mode)
+        (file_text(MINIMAL.replace(old, new) + repo_version(mode)), mode)
         for old, new in [
             ("my-agent", "no"),
             ("my-agent", "123"),
@@ -891,7 +926,7 @@ REFUSE_CORPUS: list[tuple[str, AgentFileMode]] = (
         for mode in ("store", "repo")
     ]
     + [
-        (with_line(line), mode)
+        (file_text(MINIMAL + repo_version(mode) + line + "\n"), mode)
         for line in [
             "knowledge:",
             "knowledge: true",
@@ -956,6 +991,7 @@ REFUSE_CORPUS: list[tuple[str, AgentFileMode]] = (
         for mode in ("store", "repo")
     ]
     + [
+        (file_text(), "repo"),
         (with_line("version: true"), "repo"),
         (with_line("version: '1'"), "repo"),
         (with_line("version: 01"), "repo"),

@@ -1,5 +1,6 @@
 ---
 schema: 1
+version: 1
 name: nda-comparer
 title: NDA Comparer
 description: >
