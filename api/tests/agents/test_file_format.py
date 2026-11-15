@@ -517,7 +517,10 @@ def test_repo_mode_keeps_version() -> None:
 
 @pytest.mark.parametrize("value", ["0", "-2", "1.5", "true", "'1'", "01", "0x1"])
 def test_repo_mode_refuses_a_bad_version(value: str) -> None:
-    assert "whole number" in refused(with_line(f"version: {value}"), mode="repo")["version"]
+    message = refused(with_line(f"version: {value}"), mode="repo")["version"]
+    assert message.startswith("`version` must be a whole number, 1 or more")
+    # A bad value is not reported as a missing one.
+    assert "is missing" not in message
 
 
 def test_repo_mode_refuses_a_file_without_version() -> None:
@@ -525,8 +528,33 @@ def test_repo_mode_refuses_a_file_without_version() -> None:
     assert result.agent is None
     assert [p.field for p in result.problems] == ["version"]
     message = result.problems[0].message
-    assert "`version` is missing" in message
-    assert "`version: 1`" in message
+    assert message == (
+        "`version` is missing. A file kept in the repository states its version "
+        "as a whole number, 1 or more, in plain digits, such as `version: 1`."
+    )
+    # A missing value is not reported as a bad one.
+    assert "must be" not in message
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "---\n{schema: 1, name: a, description: d, tools: chat}\n---\n",
+        "---\r\nschema: 1\r\nname: my-agent\r\ndescription: d\r\ntools: chat\r\n---\r\n",
+    ],
+    ids=["flow-style", "crlf"],
+)
+def test_repo_mode_refuses_a_missing_version_in_other_shapes(text: str) -> None:
+    result = check(text, mode="repo")
+    assert result.agent is None
+    assert [p.field for p in result.problems] == ["version"]
+    assert "`version` is missing" in result.problems[0].message
+
+
+def test_repo_mode_refuses_empty_front_matter_for_a_missing_version_too() -> None:
+    problems = refused("---\n---\n", mode="repo")
+    assert set(problems) == {"version", "schema", "name", "description", "tools"}
+    assert "`version` is missing" in problems["version"]
 
 
 def test_repo_mode_reports_a_missing_version_with_the_other_problems() -> None:

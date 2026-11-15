@@ -32,7 +32,7 @@ tools: chat
 ---
 ```
 
-Version 1 fields: `schema`, `version`, `name`, `title`, `description`, `metadata`, `model`, `skills`, `knowledge`, `tools` and `limits`. `version` is the only field the two kinds of file treat differently. A file kept in this repository must state it. A pasted file's `version` is ignored, with a notice, and is left out of the saved text. Any other field is refused. `history`, `workspace`, `subagents`, `use_as`, `memory` and `permissions` are reserved and refused.
+Version 1 fields: `schema`, `version`, `name`, `title`, `description`, `metadata`, `model`, `skills`, `knowledge`, `tools` and `limits`. `version` is the only field the two kinds of file treat differently. A file kept in this repository must state it. A pasted file's `version` is ignored, with a notice, and is left out of the saved text. The one exception: a pasted file whose front matter is written as one set of fields between `{` and `}` is refused if it has `version`, because the field cannot be cut out of it. Any other field is refused. `history`, `workspace`, `subagents`, `use_as`, `memory` and `permissions` are reserved and refused.
 
 ## Characters that are refused
 

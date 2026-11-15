@@ -26,7 +26,9 @@ valid_names = st.from_regex(r"\A[a-z][a-z0-9-]{0,63}\Z")
 any_text = st.text(max_size=80)
 # Control characters (other than tab and newline) are refused in the body.
 _NOT_SAVEABLE: list[Literal["Cc", "Cs"]] = ["Cc", "Cs"]
-# Characters that hide or reorder text are refused everywhere, the body included.
+# The named characters that hide or reorder text are refused everywhere, the
+# body included. It is a named list: other characters not shown, such as
+# variation selectors, pass.
 _HIDING = "".join(
     chr(code)
     for low, high in [

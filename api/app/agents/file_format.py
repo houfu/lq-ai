@@ -10,7 +10,9 @@ The two modes differ only in ``version`` (annex A3 point 17):
 
 * ``store`` is for a file a person pastes or uploads. ``version`` is ignored
   with a notice and its lines are left out of the saved text, because the
-  store numbers versions itself.
+  store numbers versions itself. The one exception: front matter written as
+  one set of fields between ``{`` and ``}`` is refused if it has ``version``,
+  because the field cannot be cut out of it.
 * ``repo`` is for files kept in the repository, which have no store. Such a
   file must carry ``version``, as a whole number of 1 or more. It is kept in
   the saved text.
@@ -389,8 +391,10 @@ def _bad_character(text: str, *, allow_newline: bool) -> str | None:
     """Describe the first character not allowed in ``text``, or None.
 
     Control characters are refused except tab and, where allowed, newline.
-    Characters that hide or reorder text are refused everywhere, the body
-    included, so the file shows every instruction the model reads.
+    The characters named by :func:`_hiding_character_name`, which hide or
+    reorder text, are refused everywhere, the body included. That is a named
+    list, not every character that is not shown on screen: variation
+    selectors, for example, pass.
     """
     for char in text:
         if char == "\t" or (char == "\n" and allow_newline):
@@ -627,7 +631,7 @@ class _Validator:
             self.problem(
                 "version",
                 "`version` is missing. A file kept in the repository states its version "
-                "as a whole number, for example `version: 1`.",
+                "as a whole number, 1 or more, in plain digits, such as `version: 1`.",
             )
 
         agent_fields = self._check_fields(data)
