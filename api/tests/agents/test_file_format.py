@@ -540,9 +540,10 @@ def test_repo_mode_refuses_a_file_without_version() -> None:
     "text",
     [
         "---\n{schema: 1, name: a, description: d, tools: chat}\n---\n",
+        "---\n{schema: 1,\n name: a,\n description: d,\n tools: chat}\n---\n",
         "---\r\nschema: 1\r\nname: my-agent\r\ndescription: d\r\ntools: chat\r\n---\r\n",
     ],
-    ids=["flow-style", "crlf"],
+    ids=["flow-style", "flow-style-several-lines", "crlf"],
 )
 def test_repo_mode_refuses_a_missing_version_in_other_shapes(text: str) -> None:
     result = check(text, mode="repo")
